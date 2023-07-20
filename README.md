@@ -8,8 +8,17 @@ That is, the goal is to encode the necessary data compactly while still allowing
 
 - Each node in the DAFSA is 32 bits, including the numbering needed for minimal perfect hashing
   + This allows the DAFSA to be stored in 3,872 * 4 = 15,488 bytes
-- Minimal perfect hashing is used to allow storing a separate array containing the the codepoint(s) to transform each named character reference into
-  + This is encoded as packed array of u21 integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
+- Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into
+  + This is encoded as packed array of `u21` integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
+
+Some relevant information about the set of named character references:
+
+- There are 61 characters in the full alphabet used by the list of named character references (not including `&` which every named character reference starts with). The characters are (using Zig switch case syntax): `'1'...'8', ';', 'a'...'z', 'A'...'Z'`
+- There are 3,872 edges in the minimized trie, so when encoding as a DAFSA any node can be indexed within the limits of a `u12`
+- There are 2,231 named character references in the list, meaning that "an integer which gives the number of words that would be accepted by the automaton starting from that state" (used for minimal perfect hashing, see the references below) will always be able to fit within the limits of a `u12`
+  + Note: it may be possible that the root node does not need to be numbered, in which case the maximum number of words for any node would be 168 which would fit into a `u8`
+- Most named character references get transformed into 1 codepoint. The maximum value of the first codepoint in the list is `U+1D56B`, meaning all first codepoint values can fit into a `u17`.
+- A few named character references get transformed into 2 codepoints. The set of possible second codepoints is limited to 8 different values (`U+0338`, `U+20D2`, `U+200A`, `U+0333`, `U+20E5`, `U+FE00`, `U+006A`, `U+0331`), meaning the value of the second codepoint can be encoded as a `u3` (with a supporting lookup function to go from an enum -> codepoint). One more bit is needed to encode the 'no second codepoint' option.
 
 ### `named_character_references.zig`
 
@@ -25,7 +34,7 @@ Requires `entities.json` which can be downloaded from [here](https://html.spec.w
 zig run generate.zig
 ```
 
-Outputs the generated Zig code to stdout, containg the `dafsa` array and the `codepoints_lookup` array (unpacked).
+Outputs the generated Zig code to stdout, containing the `dafsa` array and the `codepoints_lookup` array (unpacked).
 
 ### `test.zig`
 

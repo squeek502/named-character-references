@@ -192,7 +192,7 @@ const DafsaBuilder = struct {
         try writer.writeAll("pub const dafsa = [_]Node {\n");
 
         // write root
-        try writer.print("    .{{ .char = .none, .end_of_word = false, .end_of_list = true, .number = {}, .child_index = 1 }},\n", .{self.root.number});
+        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .end_of_list = true, .number = 0, .child_index = 1 },\n");
 
         var queue = std.ArrayList(*Node).init(self.allocator);
         defer queue.deinit();
@@ -228,7 +228,6 @@ const DafsaBuilder = struct {
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
             const c: u8 = @intCast(c_usize);
-            const field_name = [1]u8{c};
             const is_last_child = child_i == num_children - 1;
 
             if (!child_indexes.contains(child)) {
@@ -241,8 +240,8 @@ const DafsaBuilder = struct {
             }
 
             try writer.print(
-                "    .{{ .char = .{}, .end_of_word = {}, .end_of_list = {}, .number = {}, .child_index = {} }},\n",
-                .{ std.zig.fmtId(&field_name), child.is_terminal, is_last_child, child.number, child_indexes.get(child) orelse 0 },
+                "    .{{ .char = '{c}', .end_of_word = {}, .end_of_list = {}, .number = {}, .child_index = {} }},\n",
+                .{ c, child.is_terminal, is_last_child, child.number, child_indexes.get(child) orelse 0 },
             );
 
             child_i += 1;

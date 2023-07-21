@@ -2,9 +2,11 @@
 
 > Disclaimer: This is mostly just me learning about this stuff, don't expect this to be any good (yet?)
 
-This is an attempt at a purpose-built [DAFSA](https://en.wikipedia.org/wiki/Deterministic_acyclic_finite_state_automaton) of [named character references](https://html.spec.whatwg.org/multipage/parsing.html#named-character-reference-state) for implementing [the *Named character reference state*](https://html.spec.whatwg.org/multipage/parsing.html#named-character-reference-state) of HTML tokenization.
+This is an attempt at a purpose-built [DAFSA](https://en.wikipedia.org/wiki/Deterministic_acyclic_finite_state_automaton) of [named character references](https://html.spec.whatwg.org/multipage/named-characters.html#named-character-references) for implementing [the *Named character reference state*](https://html.spec.whatwg.org/multipage/parsing.html#named-character-reference-state) of HTML tokenization. 
 
-That is, the goal is to encode the necessary data compactly while still allowing for fast matching of named character references.
+That is, the goal is to encode the necessary data compactly while still allowing for fast matching of named character references, while taking full advantage of the note that:
+
+> This list [of named character references] is static and [will not be expanded or changed in the future](https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references).
 
 - Each node in the DAFSA is 32 bits, including the numbering needed for minimal perfect hashing
   + This allows the DAFSA to be stored in 3,872 * 4 = 15,488 bytes

@@ -12,6 +12,7 @@ That is, the goal is to encode the necessary data compactly while still allowing
   + This allows the DAFSA to be stored in 3,872 * 4 = 15,488 bytes
 - Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into
   + This is encoded as packed array of `u21` integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
+- This means that the full named character reference data is stored in 15,488 + 5,857 = 21,345 bytes or 20.84 KiB
 
 Some relevant information about the set of named character references:
 

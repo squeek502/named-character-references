@@ -20,14 +20,18 @@ fn parse(input: []const u8, output_buf: []u8) !ParseResult {
     tmp_buf.append('&') catch unreachable;
 
     var matcher = named_character_references.Matcher{};
+    var longest_matched_len: usize = 0;
     for (input[1..]) |c| {
         if (!matcher.char(c)) break;
         try tmp_buf.append(c);
+        if (matcher.matched()) {
+            longest_matched_len = tmp_buf.len;
+        }
     }
 
     // match
-    if (matcher.matched()) {
-        const codepoints = named_character_references.getCodepoints(tmp_buf.constSlice());
+    if (longest_matched_len != 0) {
+        const codepoints = named_character_references.getCodepoints(tmp_buf.constSlice()[0..longest_matched_len]);
 
         var output_len: usize = try std.unicode.utf8Encode(codepoints.first, output_buf);
         if (codepoints.second.asInt()) |codepoint| {
@@ -65,4 +69,12 @@ test {
         const expected_status: ParseResult.Status = if (object.get("errors") == null) .ok else .missing_semicolon;
         try std.testing.expectEqual(expected_status, result.status);
     }
+}
+
+test "backtracking" {
+    var buf: [128]u8 = undefined;
+    // Should match &not, but &noti could lead to valid character references so it needs to
+    // backtrack from &noti to get back to the last match (&not -> U+00AC)
+    const result = try parse("&notit;", &buf);
+    try std.testing.expectEqualStrings("\u{00AC}", result.output);
 }

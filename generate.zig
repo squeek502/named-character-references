@@ -65,13 +65,12 @@ const DafsaBuilder = struct {
         };
 
         pub fn calcNumbers(self: *Node) void {
-            if (self.number != 0) return;
+            self.number = @intFromBool(self.is_terminal);
             for (self.children) |maybe_child| {
                 const child = maybe_child orelse continue;
                 // A node's number is the sum of the
                 // numbers of its immediate child nodes.
                 child.calcNumbers();
-                if (child.is_terminal) self.number += 1;
                 self.number += child.number;
             }
         }
@@ -178,7 +177,6 @@ const DafsaBuilder = struct {
                 if (sibling == null) continue;
                 if (sibling_c < c) {
                     index += sibling.?.number;
-                    if (sibling.?.is_terminal) index += 1;
                 }
             }
             node = child;

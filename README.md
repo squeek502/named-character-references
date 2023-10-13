@@ -33,10 +33,18 @@ Contains the generated `dafsa` array, the packed version of the `codepoints_look
 Requires `entities.json` which can be downloaded from [here](https://html.spec.whatwg.org/entities.json).
 
 ```
-zig run generate.zig
+zig run generate.zig > generated.zig
 ```
 
 Outputs the generated Zig code to stdout, containing the `dafsa` array and the `codepoints_lookup` array (unpacked).
+
+#### `pack.zig`
+
+Packs the `codepoints_lookup` array and outputs a quoted string with the packed bytes. Paste the generated `codepoints_lookup` array into the file before running.
+
+```
+zig run pack.zig > packed.txt
+```
 
 ### `test.zig`
 

@@ -26,7 +26,7 @@ const DafsaBuilder = struct {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
 
-        var root = try arena.allocator().create(Node);
+        const root = try arena.allocator().create(Node);
         root.* = .{};
         return DafsaBuilder{
             .root = root,
@@ -106,7 +106,7 @@ const DafsaBuilder = struct {
             std.debug.assert(node.children[c] == null);
 
             var arena = self.arena.promote(self.allocator);
-            var child = try arena.allocator().create(Node);
+            const child = try arena.allocator().create(Node);
             self.arena = arena.state;
 
             child.* = .{};
@@ -253,7 +253,7 @@ pub fn main() !void {
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    var json_contents = try std.fs.cwd().readFileAlloc(allocator, "entities.json", std.math.maxInt(usize));
+    const json_contents = try std.fs.cwd().readFileAlloc(allocator, "entities.json", std.math.maxInt(usize));
     defer allocator.free(json_contents);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_contents, .{});

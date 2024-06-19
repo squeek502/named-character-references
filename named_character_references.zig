@@ -2,19 +2,41 @@ const std = @import("std");
 
 pub const Matcher = struct {
     node_index: u12 = 0,
+    last_matched_unique_index: u12 = 0,
+    pending_unique_index: u12 = 0,
+    /// This will be true if the last match ends with a semicolon
+    ends_with_semicolon: bool = false,
+
+    /// If `c` is the codepoint of a child of the current `node_index`, the `node_index`
+    /// is updated to that child and the function returns `true`.
+    /// Otherwise, the `node_index` is unchanged and the function returns false.
+    pub fn codepoint(self: *Matcher, c: u21) bool {
+        if (c > std.math.maxInt(u8)) return false;
+        return self.char(@intCast(c));
+    }
 
     /// If `c` is the character of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn char(self: *Matcher, c: u8) bool {
         const child_index = dafsa[self.node_index].child_index;
-        self.node_index = findInList(child_index, c) orelse return false;
+        self.node_index = findInListAndUpdateUniqueIndex(child_index, c, &self.pending_unique_index) orelse return false;
+        if (self.matched()) {
+            self.last_matched_unique_index = self.pending_unique_index;
+            self.ends_with_semicolon = c == ';';
+        }
         return true;
     }
 
     /// Returns true if the current `node_index` is marked as the end of a word
     pub fn matched(self: Matcher) bool {
         return dafsa[self.node_index].end_of_word;
+    }
+
+    /// Returns the `Codepoints` associated with the last match, if any.
+    pub fn getCodepoints(self: Matcher) ?Codepoints {
+        if (self.last_matched_unique_index == 0) return null;
+        return codepoints_lookup.get(self.last_matched_unique_index - 1);
     }
 };
 
@@ -38,73 +60,22 @@ test Matcher {
     try std.testing.expect(matcher.matched());
 }
 
-/// This function should only be called with a `name_with_ampresand` that
-/// is already known to exist within the `dafsa`.
-pub fn getCodepoints(name_with_ampresand: []const u8) Codepoints {
-    std.debug.assert(name_with_ampresand[0] == '&');
-    return getCodepointsNoAmpresand(name_with_ampresand[1..]);
-}
-
-/// This function should only be called with a `name_without_ampresand` that
-/// is already known to exist within the `dafsa`.
-pub fn getCodepointsNoAmpresand(name_without_ampresand: []const u8) Codepoints {
-    const unique_index = uniqueIndex(name_without_ampresand);
-    const lookup_index = unique_index - 1;
-    return codepoints_lookup.get(lookup_index);
-}
-
-pub fn contains(name_without_ampresand: []const u8) bool {
-    var index: u12 = 0;
-    for (name_without_ampresand) |c| {
-        index = findInList(dafsa[index].child_index, c) orelse return false;
-    }
-    return dafsa[index].end_of_word;
-}
-
-test contains {
-    try std.testing.expect(contains("Assign;"));
-    try std.testing.expect(!contains("Assign"));
-    try std.testing.expect(!contains("Assign;t"));
-}
-
 /// Search siblings of `first_child_index` for the `char`
 /// If found, returns the index of the node within the `dafsa` array.
 /// Otherwise, returns `null`.
-pub fn findInList(first_child_index: u12, char: u8) ?u12 {
+/// Updates `unique_index` as the array is traversed
+fn findInListAndUpdateUniqueIndex(first_child_index: u12, char: u8, unique_index: *u12) ?u12 {
     var index = first_child_index;
     while (true) {
-        if (dafsa[index].char == char) return index;
+        if (dafsa[index].char < char) unique_index.* += dafsa[index].number;
+        if (dafsa[index].char == char) {
+            if (dafsa[index].end_of_word) unique_index.* += 1;
+            return index;
+        }
         if (dafsa[index].end_of_list) return null;
         index += 1;
     }
     unreachable;
-}
-
-/// Returns a unique (minimal perfect hash) index (starting at 1) for the
-/// `name_without_ampresand`.
-/// This function should only be called with a `name_without_ampresand` that
-/// is already known to exist within the `dafsa`.
-pub fn uniqueIndex(name_without_ampresand: []const u8) u12 {
-    var index: u12 = 0;
-    var node_index: u12 = 0;
-
-    for (name_without_ampresand) |c| {
-        const child_index = findInList(dafsa[node_index].child_index, c).?;
-        var sibling_index = dafsa[node_index].child_index;
-        while (true) {
-            const sibling_c = dafsa[sibling_index].char;
-            std.debug.assert(sibling_c != 0);
-            if (sibling_c < c) {
-                index += dafsa[sibling_index].number;
-            }
-            if (dafsa[sibling_index].end_of_list) break;
-            sibling_index += 1;
-        }
-        node_index = child_index;
-        if (dafsa[node_index].end_of_word) index += 1;
-    }
-
-    return index;
 }
 
 pub const Node = packed struct(u32) {

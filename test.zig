@@ -16,38 +16,29 @@ pub const ParseResult = struct {
 fn parse(input: []const u8, output_buf: []u8) !ParseResult {
     std.debug.assert(input[0] == '&');
 
-    var tmp_buf = try std.BoundedArray(u8, 128).init(0);
-    tmp_buf.append('&') catch unreachable;
-
     var matcher = named_character_references.Matcher{};
-    var longest_matched_len: usize = 0;
+    var num_pending_chars: usize = 1; // the &
     for (input[1..]) |c| {
         if (!matcher.char(c)) break;
-        try tmp_buf.append(c);
-        if (matcher.matched()) {
-            longest_matched_len = tmp_buf.len;
-        }
+        num_pending_chars += 1;
     }
 
-    // match
-    if (longest_matched_len != 0) {
-        const codepoints = named_character_references.getCodepoints(tmp_buf.constSlice()[0..longest_matched_len]);
-
+    if (matcher.getCodepoints()) |codepoints| {
         var output_len: usize = try std.unicode.utf8Encode(codepoints.first, output_buf);
         if (codepoints.second.asInt()) |codepoint| {
             output_len += try std.unicode.utf8Encode(codepoint, output_buf[output_len..]);
         }
         return .{
             .output = output_buf[0..output_len],
-            .status = if (tmp_buf.constSlice()[tmp_buf.len - 1] == ';') .ok else .missing_semicolon,
+            .status = if (matcher.ends_with_semicolon) .ok else .missing_semicolon,
         };
     } else {
-        @memcpy(output_buf[0..tmp_buf.len], tmp_buf.constSlice());
-        return .{ .output = output_buf[0..tmp_buf.len] };
+        @memcpy(output_buf[0..num_pending_chars], input[0..num_pending_chars]);
+        return .{ .output = output_buf[0..num_pending_chars] };
     }
 }
 
-test {
+test "namedEntities.test" {
     const allocator = std.testing.allocator;
 
     const test_json_contents = try std.fs.cwd().readFileAlloc(allocator, "namedEntities.test", std.math.maxInt(usize));

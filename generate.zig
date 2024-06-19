@@ -289,8 +289,13 @@ pub fn main() !void {
     const writer = buffered_out.writer();
 
     {
-        var index_to_codepoints = try allocator.alloc(Codepoints, parsed.value.object.count());
-        defer allocator.free(index_to_codepoints);
+        const num_codepoints = parsed.value.object.count();
+        const PackedSlice = std.PackedIntSlice(Codepoints);
+        const packed_bytes_len = PackedSlice.bytesRequired(num_codepoints);
+        const packed_bytes = try allocator.alloc(u8, packed_bytes_len);
+        defer allocator.free(packed_bytes);
+        @memset(packed_bytes, 0);
+        var packed_array = PackedSlice.init(packed_bytes, num_codepoints);
 
         var it = parsed.value.object.iterator();
         while (it.next()) |entry| {
@@ -299,23 +304,13 @@ pub fn main() !void {
             const index = builder.getUniqueIndex(str).?;
 
             const array_index = index - 1;
-            index_to_codepoints[array_index] = .{
+            packed_array.set(array_index, .{
                 .first = @intCast(codepoints.items[0].integer),
                 .second = if (codepoints.items.len > 1) SecondCodepoint.fromCodepoint(@intCast(codepoints.items[1].integer)) else .none,
-            };
+            });
         }
 
-        const PackedSlice = std.PackedIntSlice(Codepoints);
-        const packed_bytes_len = PackedSlice.bytesRequired(index_to_codepoints.len);
-        const packed_bytes = try allocator.alloc(u8, packed_bytes_len);
-        @memset(packed_bytes, 0);
-        defer allocator.free(packed_bytes);
-        var packed_array = PackedSlice.init(packed_bytes, index_to_codepoints.len);
-        for (index_to_codepoints, 0..) |codepoints, i| {
-            packed_array.set(i, codepoints);
-        }
-
-        try writer.print("const unpacked_codepoints_lookup_len = {};\n", .{index_to_codepoints.len});
+        try writer.print("const unpacked_codepoints_lookup_len = {};\n", .{num_codepoints});
         try writer.writeAll("pub const codepoints_lookup = std.PackedIntArrayEndian(Codepoints, .little, unpacked_codepoints_lookup_len){\n");
         try writer.print("    .bytes = \"{}\".*,\n", .{std.zig.fmtEscapes(packed_array.bytes[0..])});
         try writer.writeAll("};\n\n");

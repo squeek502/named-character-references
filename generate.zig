@@ -284,15 +284,11 @@ pub fn main() !void {
         }
     }
 
-    const writer = std.io.getStdOut().writer();
-    try builder.writeDafsa(writer);
+    const out_writer = std.io.getStdOut().writer();
+    var buffered_out = std.io.bufferedWriter(out_writer);
+    const writer = buffered_out.writer();
 
     {
-        const Codepoints = struct {
-            first: u21,
-            second: ?u21,
-        };
-
         var index_to_codepoints = try allocator.alloc(Codepoints, parsed.value.object.count());
         defer allocator.free(index_to_codepoints);
 
@@ -305,33 +301,60 @@ pub fn main() !void {
             const array_index = index - 1;
             index_to_codepoints[array_index] = .{
                 .first = @intCast(codepoints.items[0].integer),
-                .second = if (codepoints.items.len > 1) @intCast(codepoints.items[1].integer) else null,
+                .second = if (codepoints.items.len > 1) SecondCodepoint.fromCodepoint(@intCast(codepoints.items[1].integer)) else .none,
             };
         }
 
-        try writer.writeAll("pub const codepoints_lookup = [_]Codepoints {\n");
-        for (index_to_codepoints) |codepoints| {
-            if (codepoints.second == null) {
-                try writer.print("    .{{ .first = '\\u{{{X}}}' }},\n", .{codepoints.first});
-            } else {
-                const second_name = switch (codepoints.second.?) {
-                    '\u{0338}' => "combining_long_solidus_overlay",
-                    '\u{20D2}' => "combining_long_vertical_line_overlay",
-                    '\u{200A}' => "hair_space",
-                    '\u{0333}' => "combining_double_low_line",
-                    '\u{20E5}' => "combining_reverse_solidus_overlay",
-                    '\u{FE00}' => "variation_selector_1",
-                    '\u{006A}' => "latin_small_letter_j",
-                    '\u{0331}' => "combining_macron_below",
-                    else => unreachable,
-                };
-
-                try writer.print("    .{{ .first = '\\u{{{X}}}', .second = .{s} }},\n", .{ codepoints.first, second_name });
-            }
+        const PackedSlice = std.PackedIntSlice(Codepoints);
+        const packed_bytes_len = PackedSlice.bytesRequired(index_to_codepoints.len);
+        const packed_bytes = try allocator.alloc(u8, packed_bytes_len);
+        @memset(packed_bytes, 0);
+        defer allocator.free(packed_bytes);
+        var packed_array = PackedSlice.init(packed_bytes, index_to_codepoints.len);
+        for (index_to_codepoints, 0..) |codepoints, i| {
+            packed_array.set(i, codepoints);
         }
-        try writer.writeAll("};\n");
+
+        try writer.print("const unpacked_codepoints_lookup_len = {};\n", .{index_to_codepoints.len});
+        try writer.writeAll("pub const codepoints_lookup = std.PackedIntArrayEndian(Codepoints, .little, unpacked_codepoints_lookup_len){\n");
+        try writer.print("    .bytes = \"{}\".*,\n", .{std.zig.fmtEscapes(packed_array.bytes[0..])});
+        try writer.writeAll("};\n\n");
     }
+
+    try builder.writeDafsa(writer);
+    try buffered_out.flush();
 }
+
+const Codepoints = packed struct(u21) {
+    first: u17, // Largest value is U+1D56B
+    second: SecondCodepoint = .none,
+};
+
+const SecondCodepoint = enum(u4) {
+    none,
+    combining_long_solidus_overlay, // U+0338
+    combining_long_vertical_line_overlay, // U+20D2
+    hair_space, // U+200A
+    combining_double_low_line, // U+0333
+    combining_reverse_solidus_overlay, // U+20E5
+    variation_selector_1, // U+FE00
+    latin_small_letter_j, // U+006A
+    combining_macron_below, // U+0331
+
+    pub fn fromCodepoint(codepoint: u21) SecondCodepoint {
+        return switch (codepoint) {
+            '\u{0338}' => .combining_long_solidus_overlay,
+            '\u{20D2}' => .combining_long_vertical_line_overlay,
+            '\u{200A}' => .hair_space,
+            '\u{0333}' => .combining_double_low_line,
+            '\u{20E5}' => .combining_reverse_solidus_overlay,
+            '\u{FE00}' => .variation_selector_1,
+            '\u{006A}' => .latin_small_letter_j,
+            '\u{0331}' => .combining_macron_below,
+            else => unreachable,
+        };
+    }
+};
 
 test {
     var builder = try DafsaBuilder.init(std.testing.allocator);

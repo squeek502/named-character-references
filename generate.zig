@@ -290,12 +290,11 @@ pub fn main() !void {
 
     {
         const num_codepoints = parsed.value.object.count();
-        const PackedSlice = std.PackedIntSlice(Codepoints);
-        const packed_bytes_len = PackedSlice.bytesRequired(num_codepoints);
+        const packed_bytes_len = try std.math.divCeil(usize, @bitSizeOf(Codepoints) * num_codepoints, 8);
         const packed_bytes = try allocator.alloc(u8, packed_bytes_len);
         defer allocator.free(packed_bytes);
         @memset(packed_bytes, 0);
-        var packed_array = PackedSlice.init(packed_bytes, num_codepoints);
+        const backing_int = @typeInfo(Codepoints).@"struct".backing_integer.?;
 
         var it = parsed.value.object.iterator();
         while (it.next()) |entry| {
@@ -304,15 +303,22 @@ pub fn main() !void {
             const index = builder.getUniqueIndex(str).?;
 
             const array_index = index - 1;
-            packed_array.set(array_index, .{
+            std.mem.writePackedInt(backing_int, packed_bytes, array_index * @bitSizeOf(backing_int), @bitCast(Codepoints{
                 .first = @intCast(codepoints.items[0].integer),
                 .second = if (codepoints.items.len > 1) SecondCodepoint.fromCodepoint(@intCast(codepoints.items[1].integer)) else .none,
-            });
+            }), .little);
         }
 
-        try writer.print("const unpacked_codepoints_lookup_len = {};\n", .{num_codepoints});
-        try writer.writeAll("pub const codepoints_lookup = std.PackedIntArrayEndian(Codepoints, .little, unpacked_codepoints_lookup_len){\n");
-        try writer.print("    .bytes = \"{}\".*,\n", .{std.zig.fmtEscapes(packed_array.bytes[0..])});
+        try writer.writeAll("pub const codepoints_lookup = struct {\n");
+        try writer.print("    const bytes = \"{}\";\n", .{std.zig.fmtEscapes(packed_bytes)});
+        try writer.writeAll(
+            \\
+            \\    pub fn get(index: u16) Codepoints {
+            \\        const backing_int = @typeInfo(Codepoints).@"struct".backing_integer.?;
+            \\        return @bitCast(std.mem.readPackedInt(backing_int, bytes, index * @bitSizeOf(backing_int), .little));
+            \\    }
+            \\
+        );
         try writer.writeAll("};\n\n");
     }
 

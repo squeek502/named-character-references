@@ -65,15 +65,13 @@ test Matcher {
 /// Otherwise, returns `null`.
 /// Updates `unique_index` as the array is traversed
 fn findInListAndUpdateUniqueIndex(first_child_index: u12, char: u8, unique_index: *u12) ?u12 {
-    var index = first_child_index;
-    while (true) {
-        if (dafsa[index].char < char) unique_index.* += dafsa[index].number;
-        if (dafsa[index].char == char) {
-            if (dafsa[index].end_of_word) unique_index.* += 1;
-            return index;
+    for (dafsa[first_child_index..], 0..) |node, i| {
+        if (node.char < char) unique_index.* += node.number;
+        if (node.char == char) {
+            if (node.end_of_word) unique_index.* += 1;
+            return @intCast(first_child_index + i);
         }
-        if (dafsa[index].end_of_list) return null;
-        index += 1;
+        if (node.end_of_list) return null;
     }
     unreachable;
 }

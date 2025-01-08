@@ -155,6 +155,10 @@ const DafsaBuilder = struct {
         return count;
     }
 
+    fn dafsaNodeCount(self: *const DafsaBuilder) usize {
+        return self.edgeCount() + 1 + self.root.numDirectChildren();
+    }
+
     fn contains(self: *const DafsaBuilder, str: []const u8) bool {
         var node = self.root;
         for (str) |c| {
@@ -192,7 +196,7 @@ const DafsaBuilder = struct {
         // write root
         try writer.writeAll("    .{ .char = 0, .end_of_word = false, .end_of_list = true, .number = 0, .child_index = 1 },\n");
 
-        var queue = std.ArrayList(*Node).init(self.allocator);
+        var queue = std.fifo.LinearFifo(*Node, .Dynamic).init(self.allocator);
         defer queue.deinit();
 
         var child_indexes = std.AutoHashMap(*Node, u12).init(self.allocator);
@@ -203,10 +207,7 @@ const DafsaBuilder = struct {
         var first_available_index: u12 = self.root.numDirectChildren() + 1;
         first_available_index = try writeDafsaChildren(self.root, writer, &queue, &child_indexes, first_available_index);
 
-        while (queue.items.len > 0) {
-            // TODO: something with better time complexity
-            const node = queue.orderedRemove(0);
-
+        while (queue.readItem()) |node| {
             first_available_index = try writeDafsaChildren(node, writer, &queue, &child_indexes, first_available_index);
         }
 
@@ -216,7 +217,7 @@ const DafsaBuilder = struct {
     fn writeDafsaChildren(
         node: *Node,
         writer: anytype,
-        queue: *std.ArrayList(*Node),
+        queue: *std.fifo.LinearFifo(*Node, .Dynamic),
         child_indexes: *std.AutoHashMap(*Node, u12),
         first_available_index: u12,
     ) !u12 {
@@ -234,7 +235,7 @@ const DafsaBuilder = struct {
                     child_indexes.putAssumeCapacityNoClobber(child, cur_available_index);
                     cur_available_index += child_num_children;
                 }
-                try queue.append(child);
+                try queue.writeItem(child);
             }
 
             try writer.print(

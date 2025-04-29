@@ -275,7 +275,7 @@ const DafsaBuilder = struct {
 
             const number = if (options.first_layer) 0 else unique_index_tally;
             try writer.print(
-                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
+                "    .{{ .char = Node.charToIndex('{c}').?, .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
                 .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
             );
 

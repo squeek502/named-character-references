@@ -190,11 +190,12 @@ const DafsaBuilder = struct {
         return index;
     }
 
-    fn writeDafsa(self: *const DafsaBuilder, writer: anytype) !void {
-        try writer.writeAll("pub const dafsa = [_]Node {\n");
+    fn writeDafsaData(self: *const DafsaBuilder, allocator: Allocator) ![]NodeData {
+        var list = try std.ArrayList(NodeData).initCapacity(allocator, self.edgeCount());
+        errdefer list.deinit();
 
         // write root
-        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .children_len = 0 },\n");
+        try list.append(.{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .children_len = 0 });
 
         var queue = std.fifo.LinearFifo(*Node, .Dynamic).init(self.allocator);
         defer queue.deinit();
@@ -208,10 +209,10 @@ const DafsaBuilder = struct {
         first_available_index = try queueDafsaChildren(self.root, &queue, &child_indexes, first_available_index);
 
         while (queue.readItem()) |node| {
-            first_available_index = try writeDafsaChildren(node, writer, &queue, &child_indexes, first_available_index);
+            first_available_index = try writeDafsaChildrenData(node, &list, &queue, &child_indexes, first_available_index);
         }
 
-        try writer.writeAll("};\n");
+        return try list.toOwnedSlice();
     }
 
     fn queueDafsaChildren(
@@ -235,9 +236,9 @@ const DafsaBuilder = struct {
         return cur_available_index;
     }
 
-    fn writeDafsaChildren(
+    fn writeDafsaChildrenData(
         node: *Node,
-        writer: anytype,
+        list: *std.ArrayList(NodeData),
         queue: *std.fifo.LinearFifo(*Node, .Dynamic),
         child_indexes: *std.AutoHashMap(*Node, u12),
         first_available_index: u12,
@@ -247,7 +248,7 @@ const DafsaBuilder = struct {
         var unique_index_tally: u12 = 0;
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
-            const c: u8 = @intCast(c_usize);
+            const c: u7 = @intCast(c_usize);
             const child_num_children = child.numDirectChildren();
 
             if (!child_indexes.contains(child)) {
@@ -259,16 +260,27 @@ const DafsaBuilder = struct {
             }
 
             const number = unique_index_tally;
-            try writer.print(
-                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
-                .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
-            );
+            try list.append(.{
+                .char = c,
+                .number = @intCast(number),
+                .end_of_word = child.is_terminal,
+                .child_index = child_indexes.get(child) orelse 0,
+                .children_len = @intCast(child_num_children),
+            });
 
             unique_index_tally += child.number;
             child_i += 1;
         }
         return cur_available_index;
     }
+};
+
+pub const NodeData = packed struct(u32) {
+    char: u7,
+    number: u8,
+    end_of_word: bool,
+    child_index: u12,
+    children_len: u4,
 };
 
 pub fn main() !void {
@@ -366,7 +378,44 @@ pub fn main() !void {
         try writer.writeAll("};\n\n");
     }
 
-    try builder.writeDafsa(writer);
+    const all_node_data = try builder.writeDafsaData(allocator);
+    defer allocator.free(all_node_data);
+
+    try writer.writeAll(
+        \\const SearchData = packed struct(u16) {
+        \\    char: u7,
+        \\    end_of_word: bool,
+        \\    number: u8,
+        \\};
+        \\
+        \\const ChildData = packed struct(u16) {
+        \\    child_index: u12,
+        \\    children_len: u4,
+        \\};
+        \\
+        \\
+    );
+
+    try writer.writeAll("const dafsa_search = [_]SearchData{\n");
+    for (all_node_data) |node_data| {
+        if (node_data.char == 0) {
+            try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0 },\n");
+        } else {
+            try writer.print("    .{{ .char = '{c}', .end_of_word = {}, .number = {} }},\n", .{ node_data.char, node_data.end_of_word, node_data.number });
+        }
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll("const dafsa_children = [_]ChildData{\n");
+    for (all_node_data) |node_data| {
+        if (node_data.char == 0) {
+            try writer.writeAll("    .{ .child_index = 0, .children_len = 0 },\n");
+        } else {
+            try writer.print("    .{{ .child_index = {}, .children_len = {} }},\n", .{ node_data.child_index, node_data.children_len });
+        }
+    }
+    try writer.writeAll("};\n\n");
+
     try buffered_out.flush();
 }
 

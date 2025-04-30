@@ -28,13 +28,20 @@ pub const Matcher = struct {
     /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn ascii_char(self: *Matcher, c: u7) bool {
         if (self.children_to_check) |children| {
-            const matching_child_index = findInListAndUpdateUniqueIndex(children, c, &self.pending_unique_index) orelse return false;
+            const matching_child_index = std.sort.binarySearch(
+                Node,
+                children,
+                c,
+                Node.searchOrder,
+            ) orelse return false;
             const node = children[matching_child_index];
-            self.children_to_check = dafsa[node.child_index..][0..node.children_len];
+            self.pending_unique_index += node.number;
             if (node.end_of_word) {
+                self.pending_unique_index += 1;
                 self.last_matched_unique_index = self.pending_unique_index;
                 self.ends_with_semicolon = c == ';';
             }
+            self.children_to_check = dafsa[node.child_index..][0..node.children_len];
             return true;
         } else {
             if (std.ascii.isAlphabetic(c)) {
@@ -74,22 +81,6 @@ test Matcher {
     // 'not' still matches fully, since the node_index is not modified here
     try std.testing.expect(!matcher.char('!'));
     //try std.testing.expect(matcher.matched());
-}
-
-/// Search siblings of `first_child_index` for the `char`
-/// If found, returns the index of the node within the `children` slice.
-/// Otherwise, returns `null`.
-/// Updates `unique_index` as the array is traversed
-fn findInListAndUpdateUniqueIndex(children: []const Node, char: u7, unique_index: *u12) ?u12 {
-    const matching_child_index = std.sort.binarySearch(
-        Node,
-        children,
-        char,
-        Node.searchOrder,
-    ) orelse return null;
-    unique_index.* += children[matching_child_index].number;
-    if (children[matching_child_index].end_of_word) unique_index.* += 1;
-    return @intCast(matching_child_index);
 }
 
 pub const Node = packed struct(u32) {

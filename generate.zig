@@ -382,9 +382,12 @@ pub fn main() !void {
     defer allocator.free(all_node_data);
 
     try writer.writeAll(
-        \\const SearchData = packed struct(u16) {
+        \\const CharData = packed struct(u8) {
         \\    char: u7,
         \\    end_of_word: bool,
+        \\};
+        \\
+        \\const NumberData = packed struct(u8) {
         \\    number: u8,
         \\};
         \\
@@ -396,13 +399,19 @@ pub fn main() !void {
         \\
     );
 
-    try writer.writeAll("const dafsa_search = [_]SearchData{\n");
+    try writer.writeAll("const dafsa_chars = [_]CharData{\n");
     for (all_node_data) |node_data| {
         if (node_data.char == 0) {
-            try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0 },\n");
+            try writer.writeAll("    .{ .char = 0, .end_of_word = false },\n");
         } else {
-            try writer.print("    .{{ .char = '{c}', .end_of_word = {}, .number = {} }},\n", .{ node_data.char, node_data.end_of_word, node_data.number });
+            try writer.print("    .{{ .char = '{c}', .end_of_word = {} }},\n", .{ node_data.char, node_data.end_of_word });
         }
+    }
+    try writer.writeAll("};\n\n");
+
+    try writer.writeAll("const dafsa_numbers = [_]NumberData{\n");
+    for (all_node_data) |node_data| {
+        try writer.print("    .{{ .number = {} }},\n", .{node_data.number});
     }
     try writer.writeAll("};\n\n");
 

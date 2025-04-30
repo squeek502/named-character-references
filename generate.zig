@@ -204,10 +204,8 @@ const DafsaBuilder = struct {
 
         try child_indexes.ensureTotalCapacity(@intCast(self.edgeCount()));
 
-        var first_available_index: u12 = self.root.numDirectChildren() + 1;
-        first_available_index = try writeDafsaChildrenWithOptions(self.root, writer, &queue, &child_indexes, first_available_index, .{
-            .first_layer = true,
-        });
+        var first_available_index: u12 = 1;
+        first_available_index = try queueDafsaChildren(self.root, &queue, &child_indexes, first_available_index);
 
         while (queue.readItem()) |node| {
             first_available_index = try writeDafsaChildren(node, writer, &queue, &child_indexes, first_available_index);
@@ -244,117 +242,9 @@ const DafsaBuilder = struct {
         child_indexes: *std.AutoHashMap(*Node, u12),
         first_available_index: u12,
     ) !u12 {
-        return writeDafsaChildrenWithOptions(node, writer, queue, child_indexes, first_available_index, .{});
-    }
-
-    fn writeDafsaChildrenWithOptions(
-        node: *Node,
-        writer: anytype,
-        queue: *std.fifo.LinearFifo(*Node, .Dynamic),
-        child_indexes: *std.AutoHashMap(*Node, u12),
-        first_available_index: u12,
-        options: struct {
-            first_layer: bool = false,
-        },
-    ) !u12 {
         var cur_available_index = first_available_index;
         var child_i: u12 = 0;
         var unique_index_tally: u12 = 0;
-        var binary_search_tallies_buf: [128]u12 = undefined;
-        var unique_index_tallies_buf: [128]u12 = undefined;
-        var chars_buf: [128]u8 = undefined;
-        for (node.children, 0..) |maybe_child, c_usize| {
-            const child = maybe_child orelse continue;
-
-            binary_search_tallies_buf[child_i] = unique_index_tally;
-            unique_index_tallies_buf[child_i] = unique_index_tally;
-            chars_buf[child_i] = @intCast(c_usize);
-
-            unique_index_tally += child.number;
-            child_i += 1;
-        }
-        const num_children = child_i;
-        const binary_search_tallies = binary_search_tallies_buf[0..num_children];
-        const unique_index_tallies = unique_index_tallies_buf[0..num_children];
-        const chars = chars_buf[0..num_children];
-
-        {
-            child_i = 0;
-            for (node.children, 0..) |maybe_child, c_usize| {
-                _ = maybe_child orelse continue;
-                const c: u8 = @intCast(c_usize);
-
-                var low: usize = 0;
-                var high: usize = num_children;
-                var last_gt: usize = 0;
-
-                while (low < high) {
-                    const mid = low + (high - low) / 2;
-                    switch (std.math.order(c, chars[mid])) {
-                        .eq => {
-                            if (last_gt != 0) {
-                                const new_tally = unique_index_tallies[mid] - unique_index_tallies[last_gt];
-                                binary_search_tallies[mid] = new_tally;
-                            }
-                            break;
-                        },
-                        .gt => {
-                            if (last_gt != 0) {
-                                const new_tally = unique_index_tallies[mid] - unique_index_tallies[last_gt];
-                                binary_search_tallies[mid] = new_tally;
-                            }
-                            last_gt = mid;
-                            low = mid + 1;
-                        },
-                        .lt => high = mid,
-                    }
-                } else {
-                    unreachable;
-                }
-
-                child_i += 1;
-            }
-        }
-
-        // Sanity check
-        {
-            child_i = 0;
-            for (node.children, 0..) |maybe_child, c_usize| {
-                _ = maybe_child orelse continue;
-                const c: u8 = @intCast(c_usize);
-
-                var low: usize = 0;
-                var high: usize = num_children;
-                var tally: u12 = 0;
-
-                while (low < high) {
-                    // Avoid overflowing in the midpoint calculation
-                    const mid = low + (high - low) / 2;
-                    switch (std.math.order(c, chars[mid])) {
-                        .eq => {
-                            tally += binary_search_tallies[mid];
-                            break;
-                        },
-                        .gt => {
-                            tally += binary_search_tallies[mid];
-                            low = mid + 1;
-                        },
-                        .lt => high = mid,
-                    }
-                } else {
-                    unreachable;
-                }
-
-                if (tally != unique_index_tallies[child_i]) {
-                    std.debug.print("expected {}, got {}\n", .{ unique_index_tallies[child_i], tally });
-                    return error.TallySanityCheckFailed;
-                }
-
-                child_i += 1;
-            }
-        }
-
-        child_i = 0;
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
             const c: u8 = @intCast(c_usize);
@@ -368,12 +258,13 @@ const DafsaBuilder = struct {
                 try queue.writeItem(child);
             }
 
-            const number = if (options.first_layer) 0 else binary_search_tallies[child_i];
+            const number = unique_index_tally;
             try writer.print(
                 "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
                 .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
             );
 
+            unique_index_tally += child.number;
             child_i += 1;
         }
         return cur_available_index;
@@ -459,15 +350,18 @@ pub fn main() !void {
         const num_children = builder.root.numDirectChildren();
         std.debug.assert(num_children == 52);
 
-        try writer.writeAll("pub const first_char_unique_indexes = [_]u12 {\n");
+        try writer.writeAll("pub const first_layer = [_]FirstLayerNode {\n");
         var unique_index_tally: u12 = 0;
+        var first_child_index: u10 = 1;
         for (0..128) |c_usize| {
             const c: u8 = @intCast(c_usize);
             const child = builder.root.children[c] orelse continue;
             std.debug.assert(std.ascii.isAlphabetic(c));
 
-            try writer.print("    {},\n", .{unique_index_tally});
+            const child_num_children = child.numDirectChildren();
+            try writer.print("    .{{ .number = {}, .child_index = {}, .children_len = {} }},\n", .{ unique_index_tally, first_child_index, child_num_children });
             unique_index_tally += child.number;
+            first_child_index += child_num_children;
         }
         try writer.writeAll("};\n\n");
     }

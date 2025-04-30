@@ -28,12 +28,16 @@ pub const Matcher = struct {
     /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn ascii_char(self: *Matcher, c: u7) bool {
         if (self.children_to_check) |children| {
-            const matching_child_index = std.sort.binarySearch(
-                CharData,
-                children,
-                c,
-                searchOrder,
-            ) orelse return false;
+            const max_children_len = 24;
+            const Block = @Vector(max_children_len, u8);
+            const sanitize_mask: Block = @splat(0x7F);
+            const search_mask: Block = @splat(c);
+            const children_block: Block = @as(*const [max_children_len]u8, @ptrCast(children.ptr[0..max_children_len])).*;
+            const sanitized = sanitize_mask & children_block;
+            const equal = sanitized == search_mask;
+            const matching_child_index = std.simd.firstTrue(equal) orelse return false;
+            if (matching_child_index >= children.len) return false;
+
             const node = children[matching_child_index];
             const absolute_index = children.ptr - &dafsa_chars + matching_child_index;
             self.pending_unique_index += dafsa_numbers[absolute_index].number;
@@ -4040,6 +4044,30 @@ const dafsa_chars = [_]CharData{
     .{ .char = 'Q', .end_of_word = false },
     .{ .char = 'e', .end_of_word = false },
     .{ .char = 'A', .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
+    .{ .char = 0, .end_of_word = false },
 };
 
 const dafsa_numbers = [_]NumberData{

@@ -407,6 +407,10 @@ pub fn main() !void {
             try writer.print("    .{{ .char = '{c}', .end_of_word = {} }},\n", .{ node_data.char, node_data.end_of_word });
         }
     }
+    const num_spacer_nodes = 24;
+    for (0..num_spacer_nodes) |_| {
+        try writer.writeAll("    .{ .char = 0, .end_of_word = false },\n");
+    }
     try writer.writeAll("};\n\n");
 
     try writer.writeAll("const dafsa_numbers = [_]NumberData{\n");

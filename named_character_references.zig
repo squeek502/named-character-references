@@ -114,7 +114,7 @@ pub const Node = packed struct(u32) {
     /// includes 61 unique characters ('1'...'8', ';', 'a'...'z', 'A'...'Z'), but we have
     /// bits to spare and encoding this as a `u8` allows us to avoid the need for converting
     /// between an `enum(u6)` containing only the alphabet and the actual `u8` character value.
-    char: u7,
+    char: u8,
     /// Nodes are numbered with "an integer which gives the number of words that
     /// would be accepted by the automaton starting from that state." This numbering
     /// allows calculating "a one-to-one correspondence between the integers 1 to L
@@ -125,7 +125,7 @@ pub const Node = packed struct(u32) {
     /// reference using a separate array.
     ///
     /// Empirically, the largest number in our DAFSA is 168, so all number values fit in a u8.
-    number: u8,
+    number: u7, // could be u6
     /// If true, this node is the end of a valid named character reference.
     /// Note: This does not necessarily mean that this node does not have child nodes.
     end_of_word: bool,

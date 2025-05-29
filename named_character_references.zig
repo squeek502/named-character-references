@@ -63,21 +63,19 @@ pub const Matcher = struct {
                 return false;
             },
             .dafsa => |children| {
-                const matching_child_index = std.sort.binarySearch(
-                    Node,
-                    children,
-                    c,
-                    Node.searchOrder,
-                ) orelse return false;
-                const node = children[matching_child_index];
-                self.pending_unique_index += node.number;
-                if (node.end_of_word) {
-                    self.pending_unique_index += 1;
-                    self.last_matched_unique_index = self.pending_unique_index;
-                    self.ends_with_semicolon = c == ';';
+                for (children) |node| {
+                    if (node.char == c) {
+                        self.pending_unique_index += node.number;
+                        if (node.end_of_word) {
+                            self.pending_unique_index += 1;
+                            self.last_matched_unique_index = self.pending_unique_index;
+                            self.ends_with_semicolon = c == ';';
+                        }
+                        self.children_to_check.dafsa = dafsa[node.child_index..][0..node.children_len];
+                        return true;
+                    }
                 }
-                self.children_to_check.dafsa = dafsa[node.child_index..][0..node.children_len];
-                return true;
+                return false;
             },
         }
     }
@@ -134,10 +132,6 @@ pub const Node = packed struct(u32) {
     /// Index of the first child of this node.
     /// There are 3872 nodes in our DAFSA, so all indexes can fit in a u12.
     child_index: u12,
-
-    pub fn searchOrder(context: u7, node: Node) std.math.Order {
-        return std.math.order(context, node.char);
-    }
 };
 
 const FirstLayerNode = packed struct {

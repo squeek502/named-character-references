@@ -194,7 +194,7 @@ const DafsaBuilder = struct {
         try writer.writeAll("pub const dafsa = [_]Node {\n");
 
         // write root
-        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .end_of_list = true, .number = 0, .child_index = 1 },\n");
+        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .children_len = 0 },\n");
 
         var queue = std.fifo.LinearFifo(*Node, .Dynamic).init(self.allocator);
         defer queue.deinit();
@@ -258,15 +258,14 @@ const DafsaBuilder = struct {
         },
     ) !u12 {
         var cur_available_index = first_available_index;
-        const num_children = node.numDirectChildren();
         var child_i: u12 = 0;
+        var unique_index_tally: u12 = 0;
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
             const c: u8 = @intCast(c_usize);
-            const is_last_child = child_i == num_children - 1;
+            const child_num_children = child.numDirectChildren();
 
             if (!child_indexes.contains(child)) {
-                const child_num_children = child.numDirectChildren();
                 if (child_num_children > 0) {
                     child_indexes.putAssumeCapacityNoClobber(child, cur_available_index);
                     cur_available_index += child_num_children;
@@ -274,12 +273,13 @@ const DafsaBuilder = struct {
                 try queue.writeItem(child);
             }
 
-            const number = if (options.first_layer) 0 else child.number;
+            const number = if (options.first_layer) 0 else unique_index_tally;
             try writer.print(
-                "    .{{ .char = '{c}', .end_of_word = {}, .end_of_list = {}, .number = {}, .child_index = {} }},\n",
-                .{ c, child.is_terminal, is_last_child, number, child_indexes.get(child) orelse 0 },
+                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
+                .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
             );
 
+            unique_index_tally += child.number;
             child_i += 1;
         }
         return cur_available_index;

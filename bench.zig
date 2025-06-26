@@ -7,31 +7,59 @@ pub fn main() !void {
     var rng = std.Random.DefaultPrng.init(0);
     const rand = rng.random();
 
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const args = try std.process.argsAlloc(allocator);
+    const only_valid = args.len >= 2 and std.mem.eql(u8, args[1], "valid");
+
     var buf: std.BoundedArray(u8, 64) = .{};
     const max_iterations = 1_000_000;
+    var num_matches: usize = 0;
     for (0..max_iterations) |_| {
         buf.clear();
         const ref = named_character_references[rand.uintLessThan(usize, named_character_references.len)];
         buf.appendSlice(ref) catch unreachable;
 
-        const choice = rand.enumValue(enum {
-            valid,
-            character_swap,
-            truncated,
-            insert_character,
-        });
+        if (!only_valid) {
+            const choice = rand.enumValue(enum {
+                valid,
+                character_swap,
+                truncated,
+                insert_character,
+                append_character,
+                ascii_char_followed_by_random_bytes,
+                random_bytes,
+            });
 
-        switch (choice) {
-            .valid => {},
-            .character_swap => {
-                buf.set(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand));
-            },
-            .truncated => {
-                buf.len -= rand.uintLessThan(usize, buf.len);
-            },
-            .insert_character => {
-                buf.insert(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand)) catch unreachable;
-            },
+            switch (choice) {
+                .valid => {},
+                .character_swap => {
+                    buf.set(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand));
+                },
+                .truncated => {
+                    buf.len -= rand.uintLessThan(usize, buf.len);
+                },
+                .insert_character => {
+                    buf.insert(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand)) catch unreachable;
+                },
+                .append_character => {
+                    buf.append(randAlphabeticAscii(rand)) catch unreachable;
+                },
+                .ascii_char_followed_by_random_bytes => {
+                    buf.clear();
+                    buf.append(randAlphabeticAscii(rand)) catch unreachable;
+                    for (0..rand.uintLessThan(usize, 10)) |_| {
+                        buf.appendAssumeCapacity(rand.int(u8));
+                    }
+                },
+                .random_bytes => {
+                    buf.clear();
+                    for (0..rand.uintLessThan(usize, 20)) |_| {
+                        buf.appendAssumeCapacity(rand.int(u8));
+                    }
+                },
+            }
         }
 
         var matcher = Matcher{};
@@ -40,9 +68,12 @@ pub fn main() !void {
         }
 
         if (matcher.getCodepoints()) |codepoints| {
+            num_matches += 1;
             std.mem.doNotOptimizeAway(&codepoints);
         }
     }
+
+    std.debug.print("{}\n", .{num_matches});
 }
 
 fn randAlphabeticAscii(rand: std.Random) u8 {

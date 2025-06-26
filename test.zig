@@ -69,3 +69,9 @@ test "backtracking" {
     const result = try parse("&notit;", &buf);
     try std.testing.expectEqualStrings("\u{00AC}", result.output);
 }
+
+test "characters after" {
+    var buf: [128]u8 = undefined;
+    const result = try parse("&notin;abc", &buf);
+    try std.testing.expectEqualStrings("\u{2209}", result.output);
+}

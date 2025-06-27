@@ -6,6 +6,13 @@ That is, the goal is to encode the necessary data compactly while still allowing
 
 > This list [of named character references] is static and [will not be expanded or changed in the future](https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references).
 
+---
+
+> [!NOTE]
+> I've written a very in-depth article on this subject [here](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/). The lessons learned in the process have not made their way into the `master` branch of this repository (yet). You can find my experimentation with different optimizations mentioned in the article in [the `experiements` branch](https://github.com/squeek502/named-character-references/tree/experiments).
+
+---
+
 - Each node in the DAFSA is 32 bits, including the numbering needed for minimal perfect hashing
   + This allows the DAFSA to be stored in 3,872 * 4 = 15,488 bytes
 - Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into

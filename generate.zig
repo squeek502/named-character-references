@@ -82,6 +82,17 @@ const DafsaBuilder = struct {
             }
             return num;
         }
+
+        pub fn getUniqueIndexTally(self: *const Node, char: u8) ?u12 {
+            var unique_index_tally: u12 = 0;
+            for (self.children, 0..) |maybe_child, c_usize| {
+                const child = maybe_child orelse continue;
+                const c: u8 = @intCast(c_usize);
+                if (c == char) return unique_index_tally;
+                unique_index_tally += child.number;
+            }
+            return null;
+        }
     };
 
     pub fn insert(self: *DafsaBuilder, str: []const u8) !void {
@@ -194,7 +205,7 @@ const DafsaBuilder = struct {
         try writer.writeAll("pub const dafsa = [_]Node {\n");
 
         // write root
-        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .children_len = 0 },\n");
+        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .last_sibling = true, .semicolon_termination = .no },\n");
 
         var queue = std.fifo.LinearFifo(*Node, .Dynamic).init(self.allocator);
         defer queue.deinit();
@@ -227,10 +238,13 @@ const DafsaBuilder = struct {
         first_available_index: u12,
     ) !u12 {
         var cur_available_index = first_available_index;
-        for (node.children) |maybe_child| {
+        for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
+            const c: u8 = @intCast(c_usize);
+            if (c == ';') continue;
             if (!child_indexes.contains(child)) {
-                const child_num_children = child.numDirectChildren();
+                var child_num_children = child.numDirectChildren();
+                if (child.children[';'] != null) child_num_children -|= 1;
                 if (child_num_children > 0) {
                     child_indexes.putAssumeCapacityNoClobber(child, cur_available_index);
                     cur_available_index += child_num_children;
@@ -250,11 +264,21 @@ const DafsaBuilder = struct {
     ) !u12 {
         var cur_available_index = first_available_index;
         var child_i: u12 = 0;
+        var num_children = node.numDirectChildren();
+        if (node.children[';'] != null) num_children -|= 1;
+
         var unique_index_tally: u12 = 0;
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
             const c: u8 = @intCast(c_usize);
-            const child_num_children = child.numDirectChildren();
+            if (c == ';') {
+                unique_index_tally += child.number;
+                continue;
+            }
+            var child_num_children = child.numDirectChildren();
+            const maybe_semicolon_child_node = child.children[';'];
+            if (maybe_semicolon_child_node != null) child_num_children -|= 1;
+            const children_only_semicolon = maybe_semicolon_child_node != null and child_num_children == 0;
 
             if (!child_indexes.contains(child)) {
                 if (child_num_children > 0) {
@@ -265,9 +289,26 @@ const DafsaBuilder = struct {
             }
 
             const number = unique_index_tally;
+            const is_last_child = child_i == num_children - 1;
+            const child_index = if (children_only_semicolon)
+                0
+            else
+                child_indexes.get(child) orelse 0;
+            const semicolon_termination_enum_name = blk: {
+                if (maybe_semicolon_child_node != null) {
+                    const semicolon_tally = child.getUniqueIndexTally(';').?;
+                    switch (semicolon_tally) {
+                        0 => break :blk ".yes",
+                        2 => break :blk ".yes_num_2",
+                        6 => break :blk ".yes_num_6",
+                        else => @panic("unexpected unique number tally on semicolon node"),
+                    }
+                }
+                break :blk ".no";
+            };
             try writer.print(
-                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
-                .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
+                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .last_sibling = {}, .semicolon_termination = {s} }},\n",
+                .{ c, child.is_terminal, number, child_index, is_last_child, semicolon_termination_enum_name },
             );
 
             unique_index_tally += child.number;
@@ -436,9 +477,9 @@ pub fn main() !void {
                 const child_c: u8 = @intCast(child_c_usize);
                 if (!std.ascii.isAlphabetic(child_c)) continue;
                 const second_layer_node = first_layer_node.children[child_c] orelse continue;
-                const child_num_children = second_layer_node.numDirectChildren();
+                const semicolon_termination = second_layer_node.children[';'] != null;
                 const first_child_index = child_indexes.get(second_layer_node) orelse 0;
-                try writer.print("            .{{ .child_index = {}, .children_len = {}, .end_of_word = {} }}, // {c}{c}\n", .{ first_child_index, child_num_children, second_layer_node.is_terminal, c, child_c });
+                try writer.print("            .{{ .child_index = {}, .end_of_word = {}, .semicolon_termination = {} }}, // {c}{c}\n", .{ first_child_index, second_layer_node.is_terminal, semicolon_termination, c, child_c });
             }
             try writer.writeAll("        },\n");
 

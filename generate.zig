@@ -277,6 +277,25 @@ const DafsaBuilder = struct {
     }
 };
 
+fn charToIndex(c: u7) ?u6 {
+    return switch (c) {
+        '1'...';' => return @intCast(c - '1'),
+        'A'...'Z' => return @intCast(c - 'A' + (';' - '1' + 1)),
+        'a'...'z' => return @intCast(c - 'a' + (';' - '1' + 1) + ('Z' - 'A' + 1)),
+        else => return null,
+    };
+}
+
+fn getBitMask(node: *DafsaBuilder.Node) u64 {
+    var mask: u64 = 0;
+    for (node.children, 0..) |maybe_child, c_usize| {
+        _ = maybe_child orelse continue;
+        const c: u7 = @intCast(c_usize);
+        mask |= @as(u64, 1) << charToIndex(c).?;
+    }
+    return mask;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
@@ -370,6 +389,17 @@ pub fn main() !void {
             first_child_index += child_num_children;
         }
         try writer.writeAll("};\n\n");
+
+        try writer.writeAll("pub const bit_masks = [_]u64 {\n");
+        for (0..128) |c_usize| {
+            const c: u8 = @intCast(c_usize);
+            const child = builder.root.children[c] orelse continue;
+            std.debug.assert(std.ascii.isAlphabetic(c));
+            const bit_mask = getBitMask(child);
+
+            try writer.print("    0x{x:0>16},\n", .{bit_mask});
+        }
+        try writer.writeAll("};\n\n");
     }
 
     {
@@ -382,25 +412,24 @@ pub fn main() !void {
         try builder.writeDafsa(dafsa_buf.writer(), &child_indexes);
 
         // Second layer accel table
-        try writer.writeAll("pub const second_layer = [_]SecondLayerNode {\n");
+        try writer.writeAll("pub const second_layer = [_][]const SecondLayerNode {\n");
         for (0..128) |c_usize| {
             const c: u8 = @intCast(c_usize);
             const first_layer_node = builder.root.children[c] orelse continue;
             std.debug.assert(std.ascii.isAlphabetic(c));
 
+            try writer.writeAll("    &[_]SecondLayerNode {\n");
             var unique_index_tally: u12 = 0;
             for (0..128) |child_c_usize| {
                 const child_c: u8 = @intCast(child_c_usize);
                 if (!std.ascii.isAlphabetic(child_c)) continue;
-                const second_layer_node = first_layer_node.children[child_c] orelse {
-                    try writer.print("    .invalid, // {c}{c}\n", .{ c, child_c });
-                    continue;
-                };
+                const second_layer_node = first_layer_node.children[child_c] orelse continue;
                 const child_num_children = second_layer_node.numDirectChildren();
                 const first_child_index = child_indexes.get(second_layer_node) orelse 0;
-                try writer.print("    .{{ .number = {}, .child_index = {}, .children_len = {}, .end_of_word = {} }}, // {c}{c}\n", .{ unique_index_tally, first_child_index, child_num_children, second_layer_node.is_terminal, c, child_c });
+                try writer.print("        .{{ .number = {}, .child_index = {}, .children_len = {}, .end_of_word = {} }}, // {c}{c}\n", .{ unique_index_tally, first_child_index, child_num_children, second_layer_node.is_terminal, c, child_c });
                 unique_index_tally += second_layer_node.number;
             }
+            try writer.writeAll("    },\n");
         }
         try writer.writeAll("};\n\n");
 

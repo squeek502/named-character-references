@@ -2,7 +2,6 @@ const std = @import("std");
 
 pub const Matcher = struct {
     children_to_check: ChildrenToCheck = .init,
-    first_char: u7 = 0,
     last_matched_unique_index: u12 = 0,
     pending_unique_index: u12 = 0,
     /// This will be true if the last match ends with a semicolon
@@ -10,7 +9,7 @@ pub const Matcher = struct {
 
     const ChildrenToCheck = union(enum) {
         init: void,
-        second_layer_bit_mask: u64,
+        second_layer: LinkNode,
         dafsa: []const Node,
     };
 
@@ -39,23 +38,23 @@ pub const Matcher = struct {
                 if (std.ascii.isAlphabetic(c)) {
                     const index: usize = if (c <= 'Z') c - 'A' else c - 'a' + 26;
                     const node = first_layer[index];
-                    self.children_to_check = .{ .second_layer_bit_mask = bit_masks[index] };
-                    self.first_char = c;
+                    self.children_to_check = .{ .second_layer = bit_masks[index] };
+                    std.debug.assert(bit_masks[index].index == index);
                     //self.overconsumed_code_points += 1;
                     self.pending_unique_index = @intCast(node.number);
                     return true;
                 }
                 return false;
             },
-            .second_layer_bit_mask => |bit_mask| {
+            .second_layer => |link| {
                 if (std.ascii.isAlphabetic(c)) {
                     const bit_index = charToIndex(c).?;
+                    const bit_mask = link.mask();
                     if (@as(u64, 1) << bit_index & bit_mask == 0) return false;
 
-                    const array_index = if (self.first_char <= 'Z') self.first_char - 'A' else self.first_char - 'a' + 26;
                     const mask = (@as(u64, 1) << bit_index) -% 1;
                     const char_index = @popCount(bit_mask & mask);
-                    const node = second_layer[array_index][char_index];
+                    const node = second_layer[link.index][char_index];
                     //self.overconsumed_code_points += 1;
                     self.pending_unique_index += node.number;
                     if (node.end_of_word) {
@@ -152,6 +151,15 @@ fn charToIndex(c: u7) ?u6 {
         else => return null,
     };
 }
+
+const LinkNode = packed struct {
+    shifted_mask: u58,
+    index: u6,
+
+    pub fn mask(self: LinkNode) u64 {
+        return @as(u64, self.shifted_mask) << 6;
+    }
+};
 
 const SecondLayerNode = packed struct {
     number: u8,
@@ -270,59 +278,59 @@ pub const first_layer = [_]FirstLayerNode{
     .{ .number = 2218 },
 };
 
-pub const bit_masks = [_]u64{
-    0x03df0ce000808000,
-    0x02c806a000000000,
-    0x02c937a002040000,
-    0x008826b020104000,
-    0x13bb0da041000000,
-    0x0088248000000000,
-    0x01c80de040100000,
-    0x028824a000000800,
-    0x038e0da002108000,
-    0x0288048000000000,
-    0x008804a000140000,
-    0x018b06a040100000,
-    0x028826a000000000,
-    0x038806a000100000,
-    0x07da0da000008000,
-    0x00c934a000000000,
-    0x0088040080000000,
-    0x02c836a000009000,
-    0x03aa34a002040000,
-    0x00c834a030040000,
-    0x03de0de000000000,
-    0x048807c000004000,
-    0x0088068000000000,
-    0x0088240000000000,
-    0x028804a080080800,
-    0x008807a000040000,
-    0x0bdf0ee000000000,
-    0x02dda7e001000000,
-    0x2bc937a000000000,
-    0x4bc977e000040800,
-    0x13ff0fa000004000,
-    0x00dd66a000000000,
-    0x05cd6fe000008000,
-    0x208886e000000800,
-    0x03be6ea000000000,
-    0x028a048000000000,
-    0x00885ca000000000,
-    0x07df5fe000049800,
-    0x029d37a000004000,
-    0x0fdb7fe110420000,
-    0x07db3fa020000000,
-    0x02cb36a000000000,
-    0x0298240000000000,
-    0x13df37e000041800,
-    0x4bfb37e000000000,
-    0x08d837e000000000,
-    0x0bdb1de000040800,
-    0x40dd07a000005800,
-    0x00d8068000000000,
-    0x0ecf358000000000,
-    0x028826a000000000,
-    0x088837a000000000,
+pub const bit_masks = [_]LinkNode{
+    .{ .shifted_mask = 0x000f7c3380020200, .index = 0 },
+    .{ .shifted_mask = 0x000b201a80000000, .index = 1 },
+    .{ .shifted_mask = 0x000b24de80081000, .index = 2 },
+    .{ .shifted_mask = 0x0002209ac0804100, .index = 3 },
+    .{ .shifted_mask = 0x004eec3681040000, .index = 4 },
+    .{ .shifted_mask = 0x0002209200000000, .index = 5 },
+    .{ .shifted_mask = 0x0007203781004000, .index = 6 },
+    .{ .shifted_mask = 0x000a209280000020, .index = 7 },
+    .{ .shifted_mask = 0x000e383680084200, .index = 8 },
+    .{ .shifted_mask = 0x000a201200000000, .index = 9 },
+    .{ .shifted_mask = 0x0002201280005000, .index = 10 },
+    .{ .shifted_mask = 0x00062c1a81004000, .index = 11 },
+    .{ .shifted_mask = 0x000a209a80000000, .index = 12 },
+    .{ .shifted_mask = 0x000e201a80004000, .index = 13 },
+    .{ .shifted_mask = 0x001f683680000200, .index = 14 },
+    .{ .shifted_mask = 0x000324d280000000, .index = 15 },
+    .{ .shifted_mask = 0x0002201002000000, .index = 16 },
+    .{ .shifted_mask = 0x000b20da80000240, .index = 17 },
+    .{ .shifted_mask = 0x000ea8d280081000, .index = 18 },
+    .{ .shifted_mask = 0x000320d280c01000, .index = 19 },
+    .{ .shifted_mask = 0x000f783780000000, .index = 20 },
+    .{ .shifted_mask = 0x0012201f00000100, .index = 21 },
+    .{ .shifted_mask = 0x0002201a00000000, .index = 22 },
+    .{ .shifted_mask = 0x0002209000000000, .index = 23 },
+    .{ .shifted_mask = 0x000a201282002020, .index = 24 },
+    .{ .shifted_mask = 0x0002201e80001000, .index = 25 },
+    .{ .shifted_mask = 0x002f7c3b80000000, .index = 26 },
+    .{ .shifted_mask = 0x000b769f80040000, .index = 27 },
+    .{ .shifted_mask = 0x00af24de80000000, .index = 28 },
+    .{ .shifted_mask = 0x012f25df80001020, .index = 29 },
+    .{ .shifted_mask = 0x004ffc3e80000100, .index = 30 },
+    .{ .shifted_mask = 0x0003759a80000000, .index = 31 },
+    .{ .shifted_mask = 0x001735bf80000200, .index = 32 },
+    .{ .shifted_mask = 0x0082221b80000020, .index = 33 },
+    .{ .shifted_mask = 0x000ef9ba80000000, .index = 34 },
+    .{ .shifted_mask = 0x000a281200000000, .index = 35 },
+    .{ .shifted_mask = 0x0002217280000000, .index = 36 },
+    .{ .shifted_mask = 0x001f7d7f80001260, .index = 37 },
+    .{ .shifted_mask = 0x000a74de80000100, .index = 38 },
+    .{ .shifted_mask = 0x003f6dff84410800, .index = 39 },
+    .{ .shifted_mask = 0x001f6cfe80800000, .index = 40 },
+    .{ .shifted_mask = 0x000b2cda80000000, .index = 41 },
+    .{ .shifted_mask = 0x000a609000000000, .index = 42 },
+    .{ .shifted_mask = 0x004f7cdf80001060, .index = 43 },
+    .{ .shifted_mask = 0x012fecdf80000000, .index = 44 },
+    .{ .shifted_mask = 0x002360df80000000, .index = 45 },
+    .{ .shifted_mask = 0x002f6c7780001020, .index = 46 },
+    .{ .shifted_mask = 0x0103741e80000160, .index = 47 },
+    .{ .shifted_mask = 0x0003601a00000000, .index = 48 },
+    .{ .shifted_mask = 0x003b3cd600000000, .index = 49 },
+    .{ .shifted_mask = 0x000a209a80000000, .index = 50 },
+    .{ .shifted_mask = 0x002220de80000000, .index = 51 },
 };
 
 pub const second_layer = [_][]const SecondLayerNode{

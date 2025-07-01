@@ -390,14 +390,15 @@ pub fn main() !void {
         }
         try writer.writeAll("};\n\n");
 
-        try writer.writeAll("pub const bit_masks = [_]u64 {\n");
+        try writer.writeAll("pub const bit_masks = [_]LinkNode {\n");
         for (0..128) |c_usize| {
-            const c: u8 = @intCast(c_usize);
+            const c: u7 = @intCast(c_usize);
             const child = builder.root.children[c] orelse continue;
             std.debug.assert(std.ascii.isAlphabetic(c));
             const bit_mask = getBitMask(child);
+            const index = if (c <= 'Z') c - 'A' else c - 'a' + 26;
 
-            try writer.print("    0x{x:0>16},\n", .{bit_mask});
+            try writer.print("    .{{ .shifted_mask = 0x{x:0>16}, .index = {} }},\n", .{ @as(u58, @intCast(bit_mask >> 6)), index });
         }
         try writer.writeAll("};\n\n");
     }

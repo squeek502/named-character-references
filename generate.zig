@@ -190,28 +190,55 @@ const DafsaBuilder = struct {
         return index;
     }
 
-    fn writeDafsa(self: *const DafsaBuilder, writer: anytype) !void {
+    fn writeDafsa(self: *const DafsaBuilder, writer: anytype, child_indexes: *std.AutoHashMap(*Node, u12)) !void {
         try writer.writeAll("pub const dafsa = [_]Node {\n");
 
         // write root
-        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .end_of_list = true, .number = 0, .child_index = 1 },\n");
+        try writer.writeAll("    .{ .char = 0, .end_of_word = false, .number = 0, .child_index = 0, .children_len = 0 },\n");
 
         var queue = std.fifo.LinearFifo(*Node, .Dynamic).init(self.allocator);
         defer queue.deinit();
 
-        var child_indexes = std.AutoHashMap(*Node, u12).init(self.allocator);
-        defer child_indexes.deinit();
-
         try child_indexes.ensureTotalCapacity(@intCast(self.edgeCount()));
 
-        var first_available_index: u12 = self.root.numDirectChildren() + 1;
-        first_available_index = try writeDafsaChildren(self.root, writer, &queue, &child_indexes, first_available_index);
+        var first_available_index: u12 = 1;
+        first_available_index = try queueDafsaChildren(self.root, &queue, child_indexes, first_available_index);
+
+        // reset since the first layer doesn't use indexes
+        child_indexes.clearRetainingCapacity();
+        first_available_index = 1;
+        const second_layer_length = queue.count;
+        for (0..second_layer_length) |_| {
+            const node = queue.readItem().?;
+            first_available_index = try queueDafsaChildren(node, &queue, child_indexes, first_available_index);
+        }
 
         while (queue.readItem()) |node| {
-            first_available_index = try writeDafsaChildren(node, writer, &queue, &child_indexes, first_available_index);
+            first_available_index = try writeDafsaChildren(node, writer, &queue, child_indexes, first_available_index);
         }
 
         try writer.writeAll("};\n");
+    }
+
+    fn queueDafsaChildren(
+        node: *Node,
+        queue: *std.fifo.LinearFifo(*Node, .Dynamic),
+        child_indexes: *std.AutoHashMap(*Node, u12),
+        first_available_index: u12,
+    ) !u12 {
+        var cur_available_index = first_available_index;
+        for (node.children) |maybe_child| {
+            const child = maybe_child orelse continue;
+            if (!child_indexes.contains(child)) {
+                const child_num_children = child.numDirectChildren();
+                if (child_num_children > 0) {
+                    child_indexes.putAssumeCapacityNoClobber(child, cur_available_index);
+                    cur_available_index += child_num_children;
+                }
+                try queue.writeItem(child);
+            }
+        }
+        return cur_available_index;
     }
 
     fn writeDafsaChildren(
@@ -222,15 +249,14 @@ const DafsaBuilder = struct {
         first_available_index: u12,
     ) !u12 {
         var cur_available_index = first_available_index;
-        const num_children = node.numDirectChildren();
         var child_i: u12 = 0;
+        var unique_index_tally: u12 = 0;
         for (node.children, 0..) |maybe_child, c_usize| {
             const child = maybe_child orelse continue;
             const c: u8 = @intCast(c_usize);
-            const is_last_child = child_i == num_children - 1;
+            const child_num_children = child.numDirectChildren();
 
             if (!child_indexes.contains(child)) {
-                const child_num_children = child.numDirectChildren();
                 if (child_num_children > 0) {
                     child_indexes.putAssumeCapacityNoClobber(child, cur_available_index);
                     cur_available_index += child_num_children;
@@ -238,16 +264,33 @@ const DafsaBuilder = struct {
                 try queue.writeItem(child);
             }
 
+            const number = unique_index_tally;
             try writer.print(
-                "    .{{ .char = '{c}', .end_of_word = {}, .end_of_list = {}, .number = {}, .child_index = {} }},\n",
-                .{ c, child.is_terminal, is_last_child, child.number, child_indexes.get(child) orelse 0 },
+                "    .{{ .char = '{c}', .end_of_word = {}, .number = {}, .child_index = {}, .children_len = {} }},\n",
+                .{ c, child.is_terminal, number, child_indexes.get(child) orelse 0, child_num_children },
             );
 
+            unique_index_tally += child.number;
             child_i += 1;
         }
         return cur_available_index;
     }
 };
+
+fn asciiAlphabeticToIndex(c: u7) u6 {
+    std.debug.assert(std.ascii.isAlphabetic(c));
+    return if (c <= 'Z') @intCast(c - 'A') else @intCast(c - 'a' + 26);
+}
+
+fn getAsciiAlphabeticBitMask(node: *DafsaBuilder.Node) u52 {
+    var mask: u52 = 0;
+    for (node.children, 0..) |maybe_child, c_usize| {
+        _ = maybe_child orelse continue;
+        const c: u7 = @intCast(c_usize);
+        mask |= @as(u52, 1) << asciiAlphabeticToIndex(c);
+    }
+    return mask;
+}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -323,7 +366,86 @@ pub fn main() !void {
         try writer.writeAll("};\n\n");
     }
 
-    try builder.writeDafsa(writer);
+    // First layer accel table
+    {
+        const num_children = builder.root.numDirectChildren();
+        std.debug.assert(num_children == 52);
+
+        try writer.writeAll("pub const first_layer = [_]FirstLayerNode {\n");
+        var unique_index_tally: u12 = 0;
+        var first_child_index: u10 = 1;
+        for (0..128) |c_usize| {
+            const c: u8 = @intCast(c_usize);
+            const child = builder.root.children[c] orelse continue;
+            std.debug.assert(std.ascii.isAlphabetic(c));
+
+            const child_num_children = child.numDirectChildren();
+            try writer.print("    .{{ .number = {} }},\n", .{unique_index_tally});
+            unique_index_tally += child.number;
+            first_child_index += child_num_children;
+        }
+        try writer.writeAll("};\n\n");
+
+        try writer.writeAll("pub const bit_masks = [_]FirstToSecondLink {\n");
+        for (0..128) |c_usize| {
+            const c: u7 = @intCast(c_usize);
+            const child = builder.root.children[c] orelse continue;
+            std.debug.assert(std.ascii.isAlphabetic(c));
+            const bit_mask = getAsciiAlphabeticBitMask(child);
+            const index = asciiAlphabeticToIndex(c);
+
+            try writer.print("    .{{ .mask = 0x{x:0>14}, .first_char_index = {} }},\n", .{ bit_mask, index });
+        }
+        try writer.writeAll("};\n\n");
+    }
+
+    {
+        var child_indexes = std.AutoHashMap(*DafsaBuilder.Node, u12).init(allocator);
+        defer child_indexes.deinit();
+
+        var dafsa_buf = std.ArrayList(u8).init(allocator);
+        defer dafsa_buf.deinit();
+
+        try builder.writeDafsa(dafsa_buf.writer(), &child_indexes);
+
+        // Second layer accel table
+        try writer.writeAll("pub const second_layer = [_]SecondLayerNodes {\n");
+        for (0..128) |c_usize| {
+            const c: u8 = @intCast(c_usize);
+            const first_layer_node = builder.root.children[c] orelse continue;
+            std.debug.assert(std.ascii.isAlphabetic(c));
+
+            try writer.writeAll("    .{\n");
+            try writer.writeAll("        .numbers = &[_]SecondLayerNodes.Number {\n");
+            var unique_index_tally: u12 = 0;
+            for (0..128) |child_c_usize| {
+                const child_c: u8 = @intCast(child_c_usize);
+                if (!std.ascii.isAlphabetic(child_c)) continue;
+                const second_layer_node = first_layer_node.children[child_c] orelse continue;
+                try writer.print("            .{{ .number = {} }}, // {c}{c}\n", .{ unique_index_tally, c, child_c });
+                unique_index_tally += second_layer_node.number;
+            }
+            try writer.writeAll("        },\n");
+
+            try writer.writeAll("        .infos = &[_]SecondLayerNodes.Info {\n");
+            for (0..128) |child_c_usize| {
+                const child_c: u8 = @intCast(child_c_usize);
+                if (!std.ascii.isAlphabetic(child_c)) continue;
+                const second_layer_node = first_layer_node.children[child_c] orelse continue;
+                const child_num_children = second_layer_node.numDirectChildren();
+                const first_child_index = child_indexes.get(second_layer_node) orelse 0;
+                try writer.print("            .{{ .child_index = {}, .children_len = {}, .end_of_word = {} }}, // {c}{c}\n", .{ first_child_index, child_num_children, second_layer_node.is_terminal, c, child_c });
+            }
+            try writer.writeAll("        },\n");
+
+            const num_children = first_layer_node.numDirectChildren();
+            try writer.print("        .len = if (want_safety) {} else {{}},\n", .{num_children});
+            try writer.writeAll("    },\n");
+        }
+        try writer.writeAll("};\n\n");
+
+        try writer.writeAll(dafsa_buf.items);
+    }
     try buffered_out.flush();
 }
 

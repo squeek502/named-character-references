@@ -6,26 +6,23 @@ That is, the goal is to encode the necessary data compactly while still allowing
 
 > This list [of named character references] is static and [will not be expanded or changed in the future](https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references).
 
----
+I've written an in-depth article about the approach I'm using, plus a comparison to the approaches used by Chrome/Firefox/Safari here:
 
-> [!NOTE]
-> I've written a very in-depth article on this subject [here](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/). The lessons learned in the process have not made their way into the `master` branch of this repository (yet). You can find my experimentation with different optimizations mentioned in the article in [the `experiements` branch](https://github.com/squeek502/named-character-references/tree/experiments).
+- [Slightly better named character reference tokenization than Chrome, Safari, and Firefox](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/)
 
----
+The current implementation in this repository is an evolution of what's described in that article. See the description at the top of [named_character_references.zig](https://github.com/squeek502/named-character-references/blob/master/named_character_references.zig) for the current details.
 
-- Each node in the DAFSA is 32 bits, including the numbering needed for minimal perfect hashing
-  + This allows the DAFSA to be stored in 3,872 * 4 = 15,488 bytes
+## Data size
+
+- The 'first layer' contains an array of 52 elements, each 2 bytes large, so that's 104 bytes
+- The 'first to second layer' linkage is an array of 52 elements, each 8 bytes large, so that's 416 bytes
+- The 'second layer' contains an array of 52 elements, each 16 bytes large on 64-bit architecture, so that's 832 bytes.
+  + Each of the 52 elements contain two pointers: one to an array of 1-byte elements, and one to an array of 2-byte elements. Both arrays within a given element are the same lengths, but the lengths vary from element-to-element. All together, the arrays take up 1890 bytes.
+- The remaining DAFSA uses nodes that are 32-bits (4-bytes) wide, and there are 3,190 nodes, so that's 12,760 bytes.
+- All together, the DAFSA uses 104 + 416 + 832 + 1,890 + 12,760 = 16,002 bytes
 - Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into
   + This is encoded as packed array of `u21` integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
-- This means that the full named character reference data is stored in 15,488 + 5,857 = 21,345 bytes or 20.84 KiB
-
-Some relevant information about the set of named character references:
-
-- There are 61 characters in the full alphabet used by the list of named character references (not including `&` which every named character reference starts with). The characters are (using Zig switch case syntax): `'1'...'8', ';', 'a'...'z', 'A'...'Z'`
-- There are 3,872 edges in the minimized trie, so when encoding as a DAFSA any node can be indexed within the limits of a `u12`
-- Each node contains "an integer which gives the number of words that would be accepted by the automaton starting from that state" (used for minimal perfect hashing, see the references below). Because the root node's number is irrelevant (it would always just be the total number of named character references), the largest number value in the generated list ends up being 168 which means that all such numbers can fit into a `u8`.
-- Most named character references get transformed into 1 codepoint. The maximum value of the first codepoint in the list is `U+1D56B`, meaning all first codepoint values can fit into a `u17`.
-- A few named character references get transformed into 2 codepoints. The set of possible second codepoints is limited to 8 different values (`U+0338`, `U+20D2`, `U+200A`, `U+0333`, `U+20E5`, `U+FE00`, `U+006A`, `U+0331`), meaning the value of the second codepoint can be encoded as a `u3` (with a supporting lookup function to go from an enum -> codepoint). One more bit is needed to encode the 'no second codepoint' option.
+- This means that the full named character reference data is stored in 16,002 + 5,857 = 21,859 bytes or 21.35 KiB
 
 ### `named_character_references.zig`
 

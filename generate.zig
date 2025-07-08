@@ -409,25 +409,63 @@ pub fn main() !void {
 
         try builder.writeDafsa(dafsa_buf.writer(), &child_indexes);
 
+        const SecondLayerNode = packed struct(u24) {
+            number: u8,
+            child_index: u10,
+            children_len: u5, // could be u4
+            end_of_word: bool,
+        };
+
         // Second layer accel table
-        try writer.writeAll("pub const second_layer = [_]SecondLayerNode {\n");
+        var second_layer = std.ArrayList(SecondLayerNode).init(allocator);
+        defer second_layer.deinit();
+
         for (0..128) |c_usize| {
             const c: u8 = @intCast(c_usize);
             const first_layer_node = builder.root.children[c] orelse continue;
             std.debug.assert(std.ascii.isAlphabetic(c));
 
-            var unique_index_tally: u12 = 0;
+            var unique_index_tally: u8 = 0;
             for (0..128) |child_c_usize| {
                 const child_c: u8 = @intCast(child_c_usize);
                 if (!std.ascii.isAlphabetic(child_c)) continue;
                 const second_layer_node = first_layer_node.children[child_c] orelse continue;
                 const child_num_children = second_layer_node.numDirectChildren();
                 const first_child_index = child_indexes.get(second_layer_node) orelse 0;
-                try writer.print("    .{{ .number = {}, .child_index = {}, .children_len = {}, .end_of_word = {} }}, // {c}{c}\n", .{ unique_index_tally, first_child_index, child_num_children, second_layer_node.is_terminal, c, child_c });
-                unique_index_tally += second_layer_node.number;
+                try second_layer.append(.{
+                    .number = unique_index_tally,
+                    .child_index = @intCast(first_child_index),
+                    .children_len = @intCast(child_num_children),
+                    .end_of_word = second_layer_node.is_terminal,
+                });
+                unique_index_tally += @intCast(second_layer_node.number);
             }
         }
-        try writer.writeAll("};\n\n");
+
+        {
+            const packed_bytes_len = try std.math.divCeil(usize, @bitSizeOf(SecondLayerNode) * second_layer.items.len, 8);
+            const packed_bytes = try allocator.alloc(u8, packed_bytes_len);
+            defer allocator.free(packed_bytes);
+            @memset(packed_bytes, 0);
+            const backing_int = @typeInfo(SecondLayerNode).@"struct".backing_integer.?;
+
+            for (second_layer.items, 0..) |second_layer_node, i| {
+                std.mem.writePackedInt(backing_int, packed_bytes, i * @bitSizeOf(backing_int), @bitCast(second_layer_node), .little);
+            }
+
+            try writer.writeAll("/// Bitpacked to save 630 bytes (each element uses 3 bytes instead of 4)\n");
+            try writer.writeAll("pub const second_layer = struct {\n");
+            try writer.print("    const bytes = \"{}\";\n", .{std.zig.fmtEscapes(packed_bytes)});
+            try writer.writeAll(
+                \\
+                \\    pub fn get(index: u16) SecondLayerNode {
+                \\        const backing_int = @typeInfo(SecondLayerNode).@"struct".backing_integer.?;
+                \\        return @bitCast(std.mem.readPackedInt(backing_int, bytes, index * @bitSizeOf(backing_int), .little));
+                \\    }
+                \\
+            );
+            try writer.writeAll("};\n\n");
+        }
 
         try writer.writeAll(dafsa_buf.items);
     }

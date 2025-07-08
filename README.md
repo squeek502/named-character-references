@@ -16,13 +16,12 @@ The current implementation in this repository is an evolution of what's describe
 
 - The 'first layer' contains an array of 52 elements, each 2 bytes large, so that's 104 bytes
 - The 'first to second layer' linkage is an array of 52 elements, each 8 bytes large, so that's 416 bytes
-- The 'second layer' contains an array of 52 elements, each 16 bytes large on 64-bit architecture, so that's 832 bytes.
-  + Each of the 52 elements contain two pointers: one to an array of 1-byte elements, and one to an array of 2-byte elements. Both arrays within a given element are the same lengths, but the lengths vary from element-to-element. All together, the arrays take up 1890 bytes.
-- The remaining DAFSA uses nodes that are 32-bits (4-bytes) wide, and there are 3,190 nodes, so that's 12,760 bytes.
-- All together, the DAFSA uses 104 + 416 + 832 + 1,890 + 12,760 = 16,002 bytes
+- The 'second layer' contains an array of 630 elements, each 4 bytes large, so that's 2,520 bytes.
+- The remaining DAFSA uses nodes that are 4 bytes large, and there are 3,190 nodes, so that's 12,760 bytes.
+- All together, the DAFSA uses 104 + 416 + 2,520 + 12,760 = 15,800 bytes
 - Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into
   + This is encoded as packed array of `u21` integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
-- This means that the full named character reference data is stored in 16,002 + 5,857 = 21,859 bytes or 21.35 KiB
+- This means that the full named character reference data is stored in 15,800 + 5,857 = 21,657 bytes or 21.14 KiB
 
 ### `named_character_references.zig`
 

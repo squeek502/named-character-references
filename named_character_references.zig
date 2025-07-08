@@ -28,13 +28,10 @@
 //!       will return either a 0 or a 1 for the index to use for the set bits.
 //! - The 'second layer' of nodes in the DAFSA have been extracted out, similar to the 'first
 //!   layer' (but note that the second layer lookup table stores more information).
-//! - The second layer lookup table is a 2D array, where the first index comes from the first
-//!   character, and the second index comes from the second character as described above
-//!   (the `@popCount` stuff). Additionally, the elements of the array use a struct-of-arrays
-//!   approach to reduce the overall data size, since there's only 3 bytes of data being stored,
-//!   so if an array-of-structs was used then there would be 1 byte of padding between elements.
-//!   Instead, those 3 bytes are split into an array of 1-byte elements and and array of 2-byte
-//!   elements to eliminate the padding bytes.
+//! - The second layer lookup table is a contiguous array, and the starting offset corresponding to
+//!   each first character is stored in the 'first to second layer' lookup table along with the
+//!   bit mask to use. The index corresponding to the second character as described above (the
+//!   `@popCount` stuff) is added to the offset to get the final index of the second layer node.
 //! - After the second layer, the rest of the data is stored using a mostly-normal DAFSA, but there
 //!   are still a few differences:
 //!     - The `number` field is cumulative, in the same way that the first/second layer store a
@@ -98,7 +95,6 @@ pub const Matcher = struct {
                 const index = asciiAlphabeticToIndex(c);
                 const node = first_layer[index];
                 self.children_to_check = .{ .second_layer = bit_masks[index] };
-                std.debug.assert(bit_masks[index].first_char_index == index);
                 self.pending_unique_index = @intCast(node.number);
                 return true;
             },
@@ -107,18 +103,16 @@ pub const Matcher = struct {
                 const bit_index = asciiAlphabeticToIndex(c);
                 if (@as(u52, 1) << bit_index & link.mask == 0) return false;
 
-                const mask = (@as(u52, 1) << bit_index) -% 1;
+                const mask = (@as(u52, 1) << bit_index) - 1;
                 const char_index = @popCount(link.mask & mask);
-                if (comptime want_safety) std.debug.assert(char_index < second_layer[link.first_char_index].len);
-                const number = second_layer[link.first_char_index].numbers[char_index].number;
-                self.pending_unique_index += number;
-                const info = second_layer[link.first_char_index].infos[char_index];
-                if (info.end_of_word) {
+                const node = second_layer[link.second_layer_offset + char_index];
+                self.pending_unique_index += node.number;
+                if (node.end_of_word) {
                     self.pending_unique_index += 1;
                     self.last_matched_unique_index = self.pending_unique_index;
                     self.ends_with_semicolon = c == ';';
                 }
-                self.children_to_check = .{ .dafsa = dafsa[info.child_index..][0..info.children_len] };
+                self.children_to_check = .{ .dafsa = dafsa[node.child_index..][0..node.children_len] };
                 return true;
             },
             .dafsa => |children| {
@@ -214,22 +208,14 @@ const FirstLayerNode = packed struct {
 
 const FirstToSecondLink = packed struct {
     mask: u52,
-    first_char_index: u6,
+    second_layer_offset: u12,
 };
 
-const SecondLayerNodes = struct {
-    numbers: [*]const Number,
-    infos: [*]const Info,
-    len: if (want_safety) u8 else void,
-
-    const Number = packed struct(u8) {
-        number: u8,
-    };
-    const Info = packed struct(u15) {
-        child_index: u10,
-        children_len: u4,
-        end_of_word: bool,
-    };
+const SecondLayerNode = packed struct {
+    number: u8,
+    child_index: u10,
+    children_len: u4,
+    end_of_word: bool,
 };
 
 /// There are only 8 possible codepoints that appear as the second codepoint of a
@@ -343,1685 +329,691 @@ pub const first_layer = [_]FirstLayerNode{
 };
 
 pub const bit_masks = [_]FirstToSecondLink{
-    .{ .mask = 0x007be19c001010, .first_char_index = 0 },
-    .{ .mask = 0x005900d4000000, .first_char_index = 1 },
-    .{ .mask = 0x005926f4004080, .first_char_index = 2 },
-    .{ .mask = 0x001104d6040208, .first_char_index = 3 },
-    .{ .mask = 0x027761b4082000, .first_char_index = 4 },
-    .{ .mask = 0x00110490000000, .first_char_index = 5 },
-    .{ .mask = 0x003901bc080200, .first_char_index = 6 },
-    .{ .mask = 0x00510494000001, .first_char_index = 7 },
-    .{ .mask = 0x0071c1b4004210, .first_char_index = 8 },
-    .{ .mask = 0x00510090000000, .first_char_index = 9 },
-    .{ .mask = 0x00110094000280, .first_char_index = 10 },
-    .{ .mask = 0x003160d4080200, .first_char_index = 11 },
-    .{ .mask = 0x005104d4000000, .first_char_index = 12 },
-    .{ .mask = 0x007100d4000200, .first_char_index = 13 },
-    .{ .mask = 0x00fb41b4000010, .first_char_index = 14 },
-    .{ .mask = 0x00192694000000, .first_char_index = 15 },
-    .{ .mask = 0x00110080100000, .first_char_index = 16 },
-    .{ .mask = 0x005906d4000012, .first_char_index = 17 },
-    .{ .mask = 0x00754694004080, .first_char_index = 18 },
-    .{ .mask = 0x00190694060080, .first_char_index = 19 },
-    .{ .mask = 0x007bc1bc000000, .first_char_index = 20 },
-    .{ .mask = 0x009100f8000008, .first_char_index = 21 },
-    .{ .mask = 0x001100d0000000, .first_char_index = 22 },
-    .{ .mask = 0x00110480000000, .first_char_index = 23 },
-    .{ .mask = 0x00510094100101, .first_char_index = 24 },
-    .{ .mask = 0x001100f4000080, .first_char_index = 25 },
-    .{ .mask = 0x017be1dc000000, .first_char_index = 26 },
-    .{ .mask = 0x005bb4fc002000, .first_char_index = 27 },
-    .{ .mask = 0x057926f4000000, .first_char_index = 28 },
-    .{ .mask = 0x09792efc000081, .first_char_index = 29 },
-    .{ .mask = 0x027fe1f4000008, .first_char_index = 30 },
-    .{ .mask = 0x001bacd4000000, .first_char_index = 31 },
-    .{ .mask = 0x00b9adfc000010, .first_char_index = 32 },
-    .{ .mask = 0x041110dc000001, .first_char_index = 33 },
-    .{ .mask = 0x0077cdd4000000, .first_char_index = 34 },
-    .{ .mask = 0x00514090000000, .first_char_index = 35 },
-    .{ .mask = 0x00110b94000000, .first_char_index = 36 },
-    .{ .mask = 0x00fbebfc000093, .first_char_index = 37 },
-    .{ .mask = 0x0053a6f4000008, .first_char_index = 38 },
-    .{ .mask = 0x01fb6ffc220840, .first_char_index = 39 },
-    .{ .mask = 0x00fb67f4040000, .first_char_index = 40 },
-    .{ .mask = 0x005966d4000000, .first_char_index = 41 },
-    .{ .mask = 0x00530480000000, .first_char_index = 42 },
-    .{ .mask = 0x027be6fc000083, .first_char_index = 43 },
-    .{ .mask = 0x097f66fc000000, .first_char_index = 44 },
-    .{ .mask = 0x011b06fc000000, .first_char_index = 45 },
-    .{ .mask = 0x017b63bc000081, .first_char_index = 46 },
-    .{ .mask = 0x081ba0f400000b, .first_char_index = 47 },
-    .{ .mask = 0x001b00d0000000, .first_char_index = 48 },
-    .{ .mask = 0x01d9e6b0000000, .first_char_index = 49 },
-    .{ .mask = 0x005104d4000000, .first_char_index = 50 },
-    .{ .mask = 0x011106f4000000, .first_char_index = 51 },
+    .{ .mask = 0x007be19c001010, .second_layer_offset = 0 },
+    .{ .mask = 0x005900d4000000, .second_layer_offset = 16 },
+    .{ .mask = 0x005926f4004080, .second_layer_offset = 24 },
+    .{ .mask = 0x001104d6040208, .second_layer_offset = 38 },
+    .{ .mask = 0x027761b4082000, .second_layer_offset = 49 },
+    .{ .mask = 0x00110490000000, .second_layer_offset = 65 },
+    .{ .mask = 0x003901bc080200, .second_layer_offset = 70 },
+    .{ .mask = 0x00510494000001, .second_layer_offset = 82 },
+    .{ .mask = 0x0071c1b4004210, .second_layer_offset = 90 },
+    .{ .mask = 0x00510090000000, .second_layer_offset = 104 },
+    .{ .mask = 0x00110094000280, .second_layer_offset = 109 },
+    .{ .mask = 0x003160d4080200, .second_layer_offset = 116 },
+    .{ .mask = 0x005104d4000000, .second_layer_offset = 127 },
+    .{ .mask = 0x007100d4000200, .second_layer_offset = 135 },
+    .{ .mask = 0x00fb41b4000010, .second_layer_offset = 144 },
+    .{ .mask = 0x00192694000000, .second_layer_offset = 158 },
+    .{ .mask = 0x00110080100000, .second_layer_offset = 167 },
+    .{ .mask = 0x005906d4000012, .second_layer_offset = 171 },
+    .{ .mask = 0x00754694004080, .second_layer_offset = 183 },
+    .{ .mask = 0x00190694060080, .second_layer_offset = 196 },
+    .{ .mask = 0x007bc1bc000000, .second_layer_offset = 207 },
+    .{ .mask = 0x009100f8000008, .second_layer_offset = 221 },
+    .{ .mask = 0x001100d0000000, .second_layer_offset = 230 },
+    .{ .mask = 0x00110480000000, .second_layer_offset = 235 },
+    .{ .mask = 0x00510094100101, .second_layer_offset = 239 },
+    .{ .mask = 0x001100f4000080, .second_layer_offset = 248 },
+    .{ .mask = 0x017be1dc000000, .second_layer_offset = 256 },
+    .{ .mask = 0x005bb4fc002000, .second_layer_offset = 272 },
+    .{ .mask = 0x057926f4000000, .second_layer_offset = 288 },
+    .{ .mask = 0x09792efc000081, .second_layer_offset = 303 },
+    .{ .mask = 0x027fe1f4000008, .second_layer_offset = 322 },
+    .{ .mask = 0x001bacd4000000, .second_layer_offset = 340 },
+    .{ .mask = 0x00b9adfc000010, .second_layer_offset = 352 },
+    .{ .mask = 0x041110dc000001, .second_layer_offset = 369 },
+    .{ .mask = 0x0077cdd4000000, .second_layer_offset = 379 },
+    .{ .mask = 0x00514090000000, .second_layer_offset = 394 },
+    .{ .mask = 0x00110b94000000, .second_layer_offset = 400 },
+    .{ .mask = 0x00fbebfc000093, .second_layer_offset = 408 },
+    .{ .mask = 0x0053a6f4000008, .second_layer_offset = 431 },
+    .{ .mask = 0x01fb6ffc220840, .second_layer_offset = 445 },
+    .{ .mask = 0x00fb67f4040000, .second_layer_offset = 469 },
+    .{ .mask = 0x005966d4000000, .second_layer_offset = 487 },
+    .{ .mask = 0x00530480000000, .second_layer_offset = 499 },
+    .{ .mask = 0x027be6fc000083, .second_layer_offset = 505 },
+    .{ .mask = 0x097f66fc000000, .second_layer_offset = 526 },
+    .{ .mask = 0x011b06fc000000, .second_layer_offset = 545 },
+    .{ .mask = 0x017b63bc000081, .second_layer_offset = 558 },
+    .{ .mask = 0x081ba0f400000b, .second_layer_offset = 576 },
+    .{ .mask = 0x001b00d0000000, .second_layer_offset = 591 },
+    .{ .mask = 0x01d9e6b0000000, .second_layer_offset = 598 },
+    .{ .mask = 0x005104d4000000, .second_layer_offset = 612 },
+    .{ .mask = 0x011106f4000000, .second_layer_offset = 620 },
 };
 
-pub const second_layer = [_]SecondLayerNodes{
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // AE
-            .{ .number = 2 }, // AM
-            .{ .number = 4 }, // Aa
-            .{ .number = 6 }, // Ab
-            .{ .number = 7 }, // Ac
-            .{ .number = 10 }, // Af
-            .{ .number = 11 }, // Ag
-            .{ .number = 13 }, // Al
-            .{ .number = 14 }, // Am
-            .{ .number = 15 }, // An
-            .{ .number = 16 }, // Ao
-            .{ .number = 18 }, // Ap
-            .{ .number = 19 }, // Ar
-            .{ .number = 21 }, // As
-            .{ .number = 23 }, // At
-            .{ .number = 25 }, // Au
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 1, .children_len = 1, .end_of_word = false }, // AE
-            .{ .child_index = 2, .children_len = 1, .end_of_word = false }, // AM
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // Aa
-            .{ .child_index = 4, .children_len = 1, .end_of_word = false }, // Ab
-            .{ .child_index = 5, .children_len = 2, .end_of_word = false }, // Ac
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Af
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // Ag
-            .{ .child_index = 9, .children_len = 1, .end_of_word = false }, // Al
-            .{ .child_index = 10, .children_len = 1, .end_of_word = false }, // Am
-            .{ .child_index = 11, .children_len = 1, .end_of_word = false }, // An
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // Ao
-            .{ .child_index = 14, .children_len = 1, .end_of_word = false }, // Ap
-            .{ .child_index = 15, .children_len = 1, .end_of_word = false }, // Ar
-            .{ .child_index = 16, .children_len = 2, .end_of_word = false }, // As
-            .{ .child_index = 18, .children_len = 1, .end_of_word = false }, // At
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // Au
-        },
-        .len = if (want_safety) 16 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Ba
-            .{ .number = 3 }, // Bc
-            .{ .number = 4 }, // Be
-            .{ .number = 7 }, // Bf
-            .{ .number = 8 }, // Bo
-            .{ .number = 9 }, // Br
-            .{ .number = 10 }, // Bs
-            .{ .number = 11 }, // Bu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 20, .children_len = 2, .end_of_word = false }, // Ba
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // Bc
-            .{ .child_index = 23, .children_len = 3, .end_of_word = false }, // Be
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Bf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Bo
-            .{ .child_index = 27, .children_len = 1, .end_of_word = false }, // Br
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Bs
-            .{ .child_index = 29, .children_len = 1, .end_of_word = false }, // Bu
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // CH
-            .{ .number = 1 }, // CO
-            .{ .number = 3 }, // Ca
-            .{ .number = 7 }, // Cc
-            .{ .number = 12 }, // Cd
-            .{ .number = 13 }, // Ce
-            .{ .number = 15 }, // Cf
-            .{ .number = 16 }, // Ch
-            .{ .number = 17 }, // Ci
-            .{ .number = 21 }, // Cl
-            .{ .number = 24 }, // Co
-            .{ .number = 32 }, // Cr
-            .{ .number = 33 }, // Cs
-            .{ .number = 34 }, // Cu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // CH
-            .{ .child_index = 31, .children_len = 1, .end_of_word = false }, // CO
-            .{ .child_index = 32, .children_len = 3, .end_of_word = false }, // Ca
-            .{ .child_index = 35, .children_len = 4, .end_of_word = false }, // Cc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // Cd
-            .{ .child_index = 40, .children_len = 2, .end_of_word = false }, // Ce
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Cf
-            .{ .child_index = 42, .children_len = 1, .end_of_word = false }, // Ch
-            .{ .child_index = 43, .children_len = 1, .end_of_word = false }, // Ci
-            .{ .child_index = 44, .children_len = 1, .end_of_word = false }, // Cl
-            .{ .child_index = 45, .children_len = 4, .end_of_word = false }, // Co
-            .{ .child_index = 49, .children_len = 1, .end_of_word = false }, // Cr
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Cs
-            .{ .child_index = 50, .children_len = 1, .end_of_word = false }, // Cu
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // DD
-            .{ .number = 2 }, // DJ
-            .{ .number = 3 }, // DS
-            .{ .number = 4 }, // DZ
-            .{ .number = 5 }, // Da
-            .{ .number = 8 }, // Dc
-            .{ .number = 10 }, // De
-            .{ .number = 12 }, // Df
-            .{ .number = 13 }, // Di
-            .{ .number = 20 }, // Do
-            .{ .number = 52 }, // Ds
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 51, .children_len = 2, .end_of_word = false }, // DD
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // DJ
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // DS
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // DZ
-            .{ .child_index = 53, .children_len = 3, .end_of_word = false }, // Da
-            .{ .child_index = 56, .children_len = 2, .end_of_word = false }, // Dc
-            .{ .child_index = 58, .children_len = 1, .end_of_word = false }, // De
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Df
-            .{ .child_index = 59, .children_len = 2, .end_of_word = false }, // Di
-            .{ .child_index = 61, .children_len = 4, .end_of_word = false }, // Do
-            .{ .child_index = 65, .children_len = 2, .end_of_word = false }, // Ds
-        },
-        .len = if (want_safety) 11 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // EN
-            .{ .number = 1 }, // ET
-            .{ .number = 3 }, // Ea
-            .{ .number = 5 }, // Ec
-            .{ .number = 9 }, // Ed
-            .{ .number = 10 }, // Ef
-            .{ .number = 11 }, // Eg
-            .{ .number = 13 }, // El
-            .{ .number = 14 }, // Em
-            .{ .number = 17 }, // Eo
-            .{ .number = 19 }, // Ep
-            .{ .number = 20 }, // Eq
-            .{ .number = 23 }, // Es
-            .{ .number = 25 }, // Et
-            .{ .number = 26 }, // Eu
-            .{ .number = 28 }, // Ex
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 67, .children_len = 1, .end_of_word = false }, // EN
-            .{ .child_index = 68, .children_len = 1, .end_of_word = false }, // ET
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // Ea
-            .{ .child_index = 69, .children_len = 3, .end_of_word = false }, // Ec
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // Ed
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Ef
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // Eg
-            .{ .child_index = 72, .children_len = 1, .end_of_word = false }, // El
-            .{ .child_index = 73, .children_len = 2, .end_of_word = false }, // Em
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // Eo
-            .{ .child_index = 75, .children_len = 1, .end_of_word = false }, // Ep
-            .{ .child_index = 76, .children_len = 1, .end_of_word = false }, // Eq
-            .{ .child_index = 77, .children_len = 2, .end_of_word = false }, // Es
-            .{ .child_index = 79, .children_len = 1, .end_of_word = false }, // Et
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // Eu
-            .{ .child_index = 80, .children_len = 2, .end_of_word = false }, // Ex
-        },
-        .len = if (want_safety) 16 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Fc
-            .{ .number = 1 }, // Ff
-            .{ .number = 2 }, // Fi
-            .{ .number = 4 }, // Fo
-            .{ .number = 7 }, // Fs
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // Fc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Ff
-            .{ .child_index = 82, .children_len = 1, .end_of_word = false }, // Fi
-            .{ .child_index = 83, .children_len = 3, .end_of_word = false }, // Fo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Fs
-        },
-        .len = if (want_safety) 5 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // GJ
-            .{ .number = 1 }, // GT
-            .{ .number = 3 }, // Ga
-            .{ .number = 5 }, // Gb
-            .{ .number = 6 }, // Gc
-            .{ .number = 9 }, // Gd
-            .{ .number = 10 }, // Gf
-            .{ .number = 11 }, // Gg
-            .{ .number = 12 }, // Go
-            .{ .number = 13 }, // Gr
-            .{ .number = 20 }, // Gs
-            .{ .number = 21 }, // Gt
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // GJ
-            .{ .child_index = 86, .children_len = 1, .end_of_word = true }, // GT
-            .{ .child_index = 87, .children_len = 1, .end_of_word = false }, // Ga
-            .{ .child_index = 4, .children_len = 1, .end_of_word = false }, // Gb
-            .{ .child_index = 88, .children_len = 3, .end_of_word = false }, // Gc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // Gd
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Gf
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Gg
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Go
-            .{ .child_index = 92, .children_len = 1, .end_of_word = false }, // Gr
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Gs
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Gt
-        },
-        .len = if (want_safety) 12 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // HA
-            .{ .number = 1 }, // Ha
-            .{ .number = 3 }, // Hc
-            .{ .number = 4 }, // Hf
-            .{ .number = 5 }, // Hi
-            .{ .number = 6 }, // Ho
-            .{ .number = 8 }, // Hs
-            .{ .number = 10 }, // Hu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 93, .children_len = 1, .end_of_word = false }, // HA
-            .{ .child_index = 94, .children_len = 2, .end_of_word = false }, // Ha
-            .{ .child_index = 96, .children_len = 1, .end_of_word = false }, // Hc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Hf
-            .{ .child_index = 97, .children_len = 1, .end_of_word = false }, // Hi
-            .{ .child_index = 98, .children_len = 2, .end_of_word = false }, // Ho
-            .{ .child_index = 65, .children_len = 2, .end_of_word = false }, // Hs
-            .{ .child_index = 100, .children_len = 1, .end_of_word = false }, // Hu
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // IE
-            .{ .number = 1 }, // IJ
-            .{ .number = 2 }, // IO
-            .{ .number = 3 }, // Ia
-            .{ .number = 5 }, // Ic
-            .{ .number = 8 }, // Id
-            .{ .number = 9 }, // If
-            .{ .number = 10 }, // Ig
-            .{ .number = 12 }, // Im
-            .{ .number = 16 }, // In
-            .{ .number = 21 }, // Io
-            .{ .number = 24 }, // Is
-            .{ .number = 25 }, // It
-            .{ .number = 26 }, // Iu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // IE
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // IJ
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // IO
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // Ia
-            .{ .child_index = 5, .children_len = 2, .end_of_word = false }, // Ic
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // Id
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // If
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // Ig
-            .{ .child_index = 102, .children_len = 3, .end_of_word = false }, // Im
-            .{ .child_index = 105, .children_len = 2, .end_of_word = false }, // In
-            .{ .child_index = 107, .children_len = 3, .end_of_word = false }, // Io
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Is
-            .{ .child_index = 110, .children_len = 1, .end_of_word = false }, // It
-            .{ .child_index = 111, .children_len = 2, .end_of_word = false }, // Iu
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Jc
-            .{ .number = 2 }, // Jf
-            .{ .number = 3 }, // Jo
-            .{ .number = 4 }, // Js
-            .{ .number = 6 }, // Ju
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 113, .children_len = 2, .end_of_word = false }, // Jc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Jf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Jo
-            .{ .child_index = 115, .children_len = 2, .end_of_word = false }, // Js
-            .{ .child_index = 117, .children_len = 1, .end_of_word = false }, // Ju
-        },
-        .len = if (want_safety) 5 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // KH
-            .{ .number = 1 }, // KJ
-            .{ .number = 2 }, // Ka
-            .{ .number = 3 }, // Kc
-            .{ .number = 5 }, // Kf
-            .{ .number = 6 }, // Ko
-            .{ .number = 7 }, // Ks
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // KH
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // KJ
-            .{ .child_index = 118, .children_len = 1, .end_of_word = false }, // Ka
-            .{ .child_index = 119, .children_len = 2, .end_of_word = false }, // Kc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Kf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Ko
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ks
-        },
-        .len = if (want_safety) 7 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // LJ
-            .{ .number = 1 }, // LT
-            .{ .number = 3 }, // La
-            .{ .number = 8 }, // Lc
-            .{ .number = 11 }, // Le
-            .{ .number = 43 }, // Lf
-            .{ .number = 44 }, // Ll
-            .{ .number = 46 }, // Lm
-            .{ .number = 47 }, // Lo
-            .{ .number = 56 }, // Ls
-            .{ .number = 59 }, // Lt
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // LJ
-            .{ .child_index = 86, .children_len = 1, .end_of_word = true }, // LT
-            .{ .child_index = 121, .children_len = 5, .end_of_word = false }, // La
-            .{ .child_index = 126, .children_len = 3, .end_of_word = false }, // Lc
-            .{ .child_index = 129, .children_len = 2, .end_of_word = false }, // Le
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Lf
-            .{ .child_index = 131, .children_len = 2, .end_of_word = false }, // Ll
-            .{ .child_index = 133, .children_len = 1, .end_of_word = false }, // Lm
-            .{ .child_index = 134, .children_len = 3, .end_of_word = false }, // Lo
-            .{ .child_index = 137, .children_len = 3, .end_of_word = false }, // Ls
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Lt
-        },
-        .len = if (want_safety) 11 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Ma
-            .{ .number = 1 }, // Mc
-            .{ .number = 2 }, // Me
-            .{ .number = 4 }, // Mf
-            .{ .number = 5 }, // Mi
-            .{ .number = 6 }, // Mo
-            .{ .number = 7 }, // Ms
-            .{ .number = 8 }, // Mu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 140, .children_len = 1, .end_of_word = false }, // Ma
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // Mc
-            .{ .child_index = 141, .children_len = 2, .end_of_word = false }, // Me
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Mf
-            .{ .child_index = 143, .children_len = 1, .end_of_word = false }, // Mi
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Mo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ms
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Mu
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // NJ
-            .{ .number = 1 }, // Na
-            .{ .number = 2 }, // Nc
-            .{ .number = 5 }, // Ne
-            .{ .number = 12 }, // Nf
-            .{ .number = 13 }, // No
-            .{ .number = 68 }, // Ns
-            .{ .number = 69 }, // Nt
-            .{ .number = 71 }, // Nu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // NJ
-            .{ .child_index = 144, .children_len = 1, .end_of_word = false }, // Na
-            .{ .child_index = 126, .children_len = 3, .end_of_word = false }, // Nc
-            .{ .child_index = 145, .children_len = 3, .end_of_word = false }, // Ne
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Nf
-            .{ .child_index = 148, .children_len = 4, .end_of_word = false }, // No
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ns
-            .{ .child_index = 18, .children_len = 1, .end_of_word = false }, // Nt
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Nu
-        },
-        .len = if (want_safety) 9 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // OE
-            .{ .number = 1 }, // Oa
-            .{ .number = 3 }, // Oc
-            .{ .number = 6 }, // Od
-            .{ .number = 7 }, // Of
-            .{ .number = 8 }, // Og
-            .{ .number = 10 }, // Om
-            .{ .number = 13 }, // Oo
-            .{ .number = 14 }, // Op
-            .{ .number = 16 }, // Or
-            .{ .number = 17 }, // Os
-            .{ .number = 20 }, // Ot
-            .{ .number = 23 }, // Ou
-            .{ .number = 25 }, // Ov
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // OE
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // Oa
-            .{ .child_index = 5, .children_len = 2, .end_of_word = false }, // Oc
-            .{ .child_index = 152, .children_len = 1, .end_of_word = false }, // Od
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Of
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // Og
-            .{ .child_index = 153, .children_len = 3, .end_of_word = false }, // Om
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Oo
-            .{ .child_index = 156, .children_len = 1, .end_of_word = false }, // Op
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Or
-            .{ .child_index = 157, .children_len = 2, .end_of_word = false }, // Os
-            .{ .child_index = 159, .children_len = 1, .end_of_word = false }, // Ot
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // Ou
-            .{ .child_index = 160, .children_len = 1, .end_of_word = false }, // Ov
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Pa
-            .{ .number = 1 }, // Pc
-            .{ .number = 2 }, // Pf
-            .{ .number = 3 }, // Ph
-            .{ .number = 4 }, // Pi
-            .{ .number = 5 }, // Pl
-            .{ .number = 6 }, // Po
-            .{ .number = 8 }, // Pr
-            .{ .number = 17 }, // Ps
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 161, .children_len = 1, .end_of_word = false }, // Pa
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // Pc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Pf
-            .{ .child_index = 42, .children_len = 1, .end_of_word = false }, // Ph
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Pi
-            .{ .child_index = 162, .children_len = 1, .end_of_word = false }, // Pl
-            .{ .child_index = 163, .children_len = 2, .end_of_word = false }, // Po
-            .{ .child_index = 165, .children_len = 4, .end_of_word = false }, // Pr
-            .{ .child_index = 169, .children_len = 2, .end_of_word = false }, // Ps
-        },
-        .len = if (want_safety) 9 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // QU
-            .{ .number = 2 }, // Qf
-            .{ .number = 3 }, // Qo
-            .{ .number = 4 }, // Qs
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 171, .children_len = 1, .end_of_word = false }, // QU
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Qf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Qo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Qs
-        },
-        .len = if (want_safety) 4 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // RB
-            .{ .number = 1 }, // RE
-            .{ .number = 3 }, // Ra
-            .{ .number = 7 }, // Rc
-            .{ .number = 10 }, // Re
-            .{ .number = 14 }, // Rf
-            .{ .number = 15 }, // Rh
-            .{ .number = 16 }, // Ri
-            .{ .number = 39 }, // Ro
-            .{ .number = 41 }, // Rr
-            .{ .number = 42 }, // Rs
-            .{ .number = 44 }, // Ru
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // RB
-            .{ .child_index = 173, .children_len = 1, .end_of_word = false }, // RE
-            .{ .child_index = 174, .children_len = 3, .end_of_word = false }, // Ra
-            .{ .child_index = 126, .children_len = 3, .end_of_word = false }, // Rc
-            .{ .child_index = 177, .children_len = 2, .end_of_word = false }, // Re
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Rf
-            .{ .child_index = 179, .children_len = 1, .end_of_word = false }, // Rh
-            .{ .child_index = 180, .children_len = 1, .end_of_word = false }, // Ri
-            .{ .child_index = 181, .children_len = 2, .end_of_word = false }, // Ro
-            .{ .child_index = 183, .children_len = 1, .end_of_word = false }, // Rr
-            .{ .child_index = 184, .children_len = 2, .end_of_word = false }, // Rs
-            .{ .child_index = 186, .children_len = 1, .end_of_word = false }, // Ru
-        },
-        .len = if (want_safety) 12 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // SH
-            .{ .number = 2 }, // SO
-            .{ .number = 3 }, // Sa
-            .{ .number = 4 }, // Sc
-            .{ .number = 9 }, // Sf
-            .{ .number = 10 }, // Sh
-            .{ .number = 14 }, // Si
-            .{ .number = 15 }, // Sm
-            .{ .number = 16 }, // So
-            .{ .number = 17 }, // Sq
-            .{ .number = 25 }, // Ss
-            .{ .number = 26 }, // St
-            .{ .number = 27 }, // Su
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 187, .children_len = 2, .end_of_word = false }, // SH
-            .{ .child_index = 189, .children_len = 1, .end_of_word = false }, // SO
-            .{ .child_index = 144, .children_len = 1, .end_of_word = false }, // Sa
-            .{ .child_index = 190, .children_len = 5, .end_of_word = false }, // Sc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Sf
-            .{ .child_index = 195, .children_len = 1, .end_of_word = false }, // Sh
-            .{ .child_index = 196, .children_len = 1, .end_of_word = false }, // Si
-            .{ .child_index = 197, .children_len = 1, .end_of_word = false }, // Sm
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // So
-            .{ .child_index = 198, .children_len = 2, .end_of_word = false }, // Sq
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ss
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // St
-            .{ .child_index = 201, .children_len = 4, .end_of_word = false }, // Su
-        },
-        .len = if (want_safety) 13 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // TH
-            .{ .number = 2 }, // TR
-            .{ .number = 3 }, // TS
-            .{ .number = 5 }, // Ta
-            .{ .number = 7 }, // Tc
-            .{ .number = 10 }, // Tf
-            .{ .number = 11 }, // Th
-            .{ .number = 15 }, // Ti
-            .{ .number = 19 }, // To
-            .{ .number = 20 }, // Tr
-            .{ .number = 21 }, // Ts
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 205, .children_len = 1, .end_of_word = false }, // TH
-            .{ .child_index = 206, .children_len = 1, .end_of_word = false }, // TR
-            .{ .child_index = 207, .children_len = 2, .end_of_word = false }, // TS
-            .{ .child_index = 209, .children_len = 2, .end_of_word = false }, // Ta
-            .{ .child_index = 126, .children_len = 3, .end_of_word = false }, // Tc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Tf
-            .{ .child_index = 211, .children_len = 2, .end_of_word = false }, // Th
-            .{ .child_index = 213, .children_len = 1, .end_of_word = false }, // Ti
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // To
-            .{ .child_index = 214, .children_len = 1, .end_of_word = false }, // Tr
-            .{ .child_index = 65, .children_len = 2, .end_of_word = false }, // Ts
-        },
-        .len = if (want_safety) 11 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Ua
-            .{ .number = 4 }, // Ub
-            .{ .number = 6 }, // Uc
-            .{ .number = 9 }, // Ud
-            .{ .number = 10 }, // Uf
-            .{ .number = 11 }, // Ug
-            .{ .number = 13 }, // Um
-            .{ .number = 14 }, // Un
-            .{ .number = 20 }, // Uo
-            .{ .number = 22 }, // Up
-            .{ .number = 35 }, // Ur
-            .{ .number = 36 }, // Us
-            .{ .number = 37 }, // Ut
-            .{ .number = 38 }, // Uu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 215, .children_len = 2, .end_of_word = false }, // Ua
-            .{ .child_index = 217, .children_len = 1, .end_of_word = false }, // Ub
-            .{ .child_index = 5, .children_len = 2, .end_of_word = false }, // Uc
-            .{ .child_index = 152, .children_len = 1, .end_of_word = false }, // Ud
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Uf
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // Ug
-            .{ .child_index = 10, .children_len = 1, .end_of_word = false }, // Um
-            .{ .child_index = 218, .children_len = 2, .end_of_word = false }, // Un
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // Uo
-            .{ .child_index = 220, .children_len = 8, .end_of_word = false }, // Up
-            .{ .child_index = 228, .children_len = 1, .end_of_word = false }, // Ur
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Us
-            .{ .child_index = 110, .children_len = 1, .end_of_word = false }, // Ut
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // Uu
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // VD
-            .{ .number = 1 }, // Vb
-            .{ .number = 2 }, // Vc
-            .{ .number = 3 }, // Vd
-            .{ .number = 5 }, // Ve
-            .{ .number = 13 }, // Vf
-            .{ .number = 14 }, // Vo
-            .{ .number = 15 }, // Vs
-            .{ .number = 16 }, // Vv
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 229, .children_len = 1, .end_of_word = false }, // VD
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // Vb
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // Vc
-            .{ .child_index = 230, .children_len = 1, .end_of_word = false }, // Vd
-            .{ .child_index = 231, .children_len = 2, .end_of_word = false }, // Ve
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Vf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Vo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Vs
-            .{ .child_index = 233, .children_len = 1, .end_of_word = false }, // Vv
-        },
-        .len = if (want_safety) 9 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Wc
-            .{ .number = 1 }, // We
-            .{ .number = 2 }, // Wf
-            .{ .number = 3 }, // Wo
-            .{ .number = 4 }, // Ws
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 96, .children_len = 1, .end_of_word = false }, // Wc
-            .{ .child_index = 234, .children_len = 1, .end_of_word = false }, // We
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Wf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Wo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ws
-        },
-        .len = if (want_safety) 5 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // Xf
-            .{ .number = 1 }, // Xi
-            .{ .number = 2 }, // Xo
-            .{ .number = 3 }, // Xs
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Xf
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // Xi
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Xo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Xs
-        },
-        .len = if (want_safety) 4 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // YA
-            .{ .number = 1 }, // YI
-            .{ .number = 2 }, // YU
-            .{ .number = 3 }, // Ya
-            .{ .number = 5 }, // Yc
-            .{ .number = 7 }, // Yf
-            .{ .number = 8 }, // Yo
-            .{ .number = 9 }, // Ys
-            .{ .number = 10 }, // Yu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // YA
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // YI
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // YU
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // Ya
-            .{ .child_index = 113, .children_len = 2, .end_of_word = false }, // Yc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Yf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Yo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Ys
-            .{ .child_index = 235, .children_len = 1, .end_of_word = false }, // Yu
-        },
-        .len = if (want_safety) 9 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ZH
-            .{ .number = 1 }, // Za
-            .{ .number = 2 }, // Zc
-            .{ .number = 4 }, // Zd
-            .{ .number = 5 }, // Ze
-            .{ .number = 7 }, // Zf
-            .{ .number = 8 }, // Zo
-            .{ .number = 9 }, // Zs
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // ZH
-            .{ .child_index = 144, .children_len = 1, .end_of_word = false }, // Za
-            .{ .child_index = 56, .children_len = 2, .end_of_word = false }, // Zc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // Zd
-            .{ .child_index = 236, .children_len = 2, .end_of_word = false }, // Ze
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // Zf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // Zo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // Zs
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // aa
-            .{ .number = 2 }, // ab
-            .{ .number = 3 }, // ac
-            .{ .number = 11 }, // ae
-            .{ .number = 13 }, // af
-            .{ .number = 15 }, // ag
-            .{ .number = 17 }, // al
-            .{ .number = 20 }, // am
-            .{ .number = 24 }, // an
-            .{ .number = 47 }, // ao
-            .{ .number = 49 }, // ap
-            .{ .number = 57 }, // ar
-            .{ .number = 59 }, // as
-            .{ .number = 63 }, // at
-            .{ .number = 65 }, // au
-            .{ .number = 67 }, // aw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // aa
-            .{ .child_index = 4, .children_len = 1, .end_of_word = false }, // ab
-            .{ .child_index = 238, .children_len = 6, .end_of_word = false }, // ac
-            .{ .child_index = 1, .children_len = 1, .end_of_word = false }, // ae
-            .{ .child_index = 244, .children_len = 2, .end_of_word = false }, // af
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // ag
-            .{ .child_index = 246, .children_len = 2, .end_of_word = false }, // al
-            .{ .child_index = 248, .children_len = 2, .end_of_word = false }, // am
-            .{ .child_index = 250, .children_len = 2, .end_of_word = false }, // an
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // ao
-            .{ .child_index = 252, .children_len = 7, .end_of_word = false }, // ap
-            .{ .child_index = 15, .children_len = 1, .end_of_word = false }, // ar
-            .{ .child_index = 259, .children_len = 3, .end_of_word = false }, // as
-            .{ .child_index = 18, .children_len = 1, .end_of_word = false }, // at
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // au
-            .{ .child_index = 262, .children_len = 2, .end_of_word = false }, // aw
-        },
-        .len = if (want_safety) 16 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // bN
-            .{ .number = 1 }, // ba
-            .{ .number = 9 }, // bb
-            .{ .number = 11 }, // bc
-            .{ .number = 13 }, // bd
-            .{ .number = 14 }, // be
-            .{ .number = 22 }, // bf
-            .{ .number = 23 }, // bi
-            .{ .number = 36 }, // bk
-            .{ .number = 37 }, // bl
-            .{ .number = 48 }, // bn
-            .{ .number = 51 }, // bo
-            .{ .number = 99 }, // bp
-            .{ .number = 100 }, // br
-            .{ .number = 103 }, // bs
-            .{ .number = 110 }, // bu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // bN
-            .{ .child_index = 264, .children_len = 2, .end_of_word = false }, // ba
-            .{ .child_index = 266, .children_len = 1, .end_of_word = false }, // bb
-            .{ .child_index = 267, .children_len = 2, .end_of_word = false }, // bc
-            .{ .child_index = 269, .children_len = 1, .end_of_word = false }, // bd
-            .{ .child_index = 270, .children_len = 5, .end_of_word = false }, // be
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // bf
-            .{ .child_index = 275, .children_len = 1, .end_of_word = false }, // bi
-            .{ .child_index = 276, .children_len = 1, .end_of_word = false }, // bk
-            .{ .child_index = 277, .children_len = 3, .end_of_word = false }, // bl
-            .{ .child_index = 280, .children_len = 2, .end_of_word = false }, // bn
-            .{ .child_index = 282, .children_len = 4, .end_of_word = false }, // bo
-            .{ .child_index = 286, .children_len = 1, .end_of_word = false }, // bp
-            .{ .child_index = 287, .children_len = 2, .end_of_word = false }, // br
-            .{ .child_index = 289, .children_len = 4, .end_of_word = false }, // bs
-            .{ .child_index = 293, .children_len = 2, .end_of_word = false }, // bu
-        },
-        .len = if (want_safety) 16 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ca
-            .{ .number = 10 }, // cc
-            .{ .number = 17 }, // cd
-            .{ .number = 18 }, // ce
-            .{ .number = 24 }, // cf
-            .{ .number = 25 }, // ch
-            .{ .number = 29 }, // ci
-            .{ .number = 44 }, // cl
-            .{ .number = 46 }, // co
-            .{ .number = 63 }, // cr
-            .{ .number = 65 }, // cs
-            .{ .number = 70 }, // ct
-            .{ .number = 71 }, // cu
-            .{ .number = 96 }, // cw
-            .{ .number = 98 }, // cy
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 295, .children_len = 3, .end_of_word = false }, // ca
-            .{ .child_index = 298, .children_len = 4, .end_of_word = false }, // cc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // cd
-            .{ .child_index = 302, .children_len = 3, .end_of_word = false }, // ce
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // cf
-            .{ .child_index = 305, .children_len = 3, .end_of_word = false }, // ch
-            .{ .child_index = 308, .children_len = 1, .end_of_word = false }, // ci
-            .{ .child_index = 309, .children_len = 1, .end_of_word = false }, // cl
-            .{ .child_index = 310, .children_len = 4, .end_of_word = false }, // co
-            .{ .child_index = 314, .children_len = 2, .end_of_word = false }, // cr
-            .{ .child_index = 316, .children_len = 2, .end_of_word = false }, // cs
-            .{ .child_index = 318, .children_len = 1, .end_of_word = false }, // ct
-            .{ .child_index = 319, .children_len = 7, .end_of_word = false }, // cu
-            .{ .child_index = 262, .children_len = 2, .end_of_word = false }, // cw
-            .{ .child_index = 326, .children_len = 1, .end_of_word = false }, // cy
-        },
-        .len = if (want_safety) 15 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // dA
-            .{ .number = 1 }, // dH
-            .{ .number = 2 }, // da
-            .{ .number = 7 }, // db
-            .{ .number = 9 }, // dc
-            .{ .number = 11 }, // dd
-            .{ .number = 15 }, // de
-            .{ .number = 19 }, // df
-            .{ .number = 21 }, // dh
-            .{ .number = 23 }, // di
-            .{ .number = 35 }, // dj
-            .{ .number = 36 }, // dl
-            .{ .number = 38 }, // do
-            .{ .number = 51 }, // dr
-            .{ .number = 54 }, // ds
-            .{ .number = 58 }, // dt
-            .{ .number = 61 }, // du
-            .{ .number = 63 }, // dw
-            .{ .number = 64 }, // dz
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 327, .children_len = 1, .end_of_word = false }, // dA
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // dH
-            .{ .child_index = 328, .children_len = 4, .end_of_word = false }, // da
-            .{ .child_index = 332, .children_len = 2, .end_of_word = false }, // db
-            .{ .child_index = 56, .children_len = 2, .end_of_word = false }, // dc
-            .{ .child_index = 334, .children_len = 3, .end_of_word = false }, // dd
-            .{ .child_index = 337, .children_len = 3, .end_of_word = false }, // de
-            .{ .child_index = 340, .children_len = 2, .end_of_word = false }, // df
-            .{ .child_index = 342, .children_len = 1, .end_of_word = false }, // dh
-            .{ .child_index = 343, .children_len = 5, .end_of_word = false }, // di
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // dj
-            .{ .child_index = 348, .children_len = 1, .end_of_word = false }, // dl
-            .{ .child_index = 349, .children_len = 5, .end_of_word = false }, // do
-            .{ .child_index = 354, .children_len = 2, .end_of_word = false }, // dr
-            .{ .child_index = 356, .children_len = 3, .end_of_word = false }, // ds
-            .{ .child_index = 359, .children_len = 2, .end_of_word = false }, // dt
-            .{ .child_index = 361, .children_len = 2, .end_of_word = false }, // du
-            .{ .child_index = 363, .children_len = 1, .end_of_word = false }, // dw
-            .{ .child_index = 364, .children_len = 2, .end_of_word = false }, // dz
-        },
-        .len = if (want_safety) 19 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // eD
-            .{ .number = 2 }, // ea
-            .{ .number = 5 }, // ec
-            .{ .number = 11 }, // ed
-            .{ .number = 12 }, // ee
-            .{ .number = 13 }, // ef
-            .{ .number = 15 }, // eg
-            .{ .number = 20 }, // el
-            .{ .number = 25 }, // em
-            .{ .number = 32 }, // en
-            .{ .number = 34 }, // eo
-            .{ .number = 36 }, // ep
-            .{ .number = 42 }, // eq
-            .{ .number = 52 }, // er
-            .{ .number = 54 }, // es
-            .{ .number = 57 }, // et
-            .{ .number = 60 }, // eu
-            .{ .number = 63 }, // ex
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 366, .children_len = 2, .end_of_word = false }, // eD
-            .{ .child_index = 368, .children_len = 2, .end_of_word = false }, // ea
-            .{ .child_index = 370, .children_len = 4, .end_of_word = false }, // ec
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // ed
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // ee
-            .{ .child_index = 374, .children_len = 2, .end_of_word = false }, // ef
-            .{ .child_index = 376, .children_len = 3, .end_of_word = false }, // eg
-            .{ .child_index = 379, .children_len = 4, .end_of_word = false }, // el
-            .{ .child_index = 383, .children_len = 3, .end_of_word = false }, // em
-            .{ .child_index = 386, .children_len = 2, .end_of_word = false }, // en
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // eo
-            .{ .child_index = 388, .children_len = 3, .end_of_word = false }, // ep
-            .{ .child_index = 391, .children_len = 4, .end_of_word = false }, // eq
-            .{ .child_index = 395, .children_len = 2, .end_of_word = false }, // er
-            .{ .child_index = 397, .children_len = 3, .end_of_word = false }, // es
-            .{ .child_index = 400, .children_len = 2, .end_of_word = false }, // et
-            .{ .child_index = 402, .children_len = 2, .end_of_word = false }, // eu
-            .{ .child_index = 404, .children_len = 3, .end_of_word = false }, // ex
-        },
-        .len = if (want_safety) 18 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // fa
-            .{ .number = 1 }, // fc
-            .{ .number = 2 }, // fe
-            .{ .number = 3 }, // ff
-            .{ .number = 7 }, // fi
-            .{ .number = 8 }, // fj
-            .{ .number = 9 }, // fl
-            .{ .number = 12 }, // fn
-            .{ .number = 13 }, // fo
-            .{ .number = 17 }, // fp
-            .{ .number = 18 }, // fr
-            .{ .number = 38 }, // fs
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 407, .children_len = 1, .end_of_word = false }, // fa
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // fc
-            .{ .child_index = 408, .children_len = 1, .end_of_word = false }, // fe
-            .{ .child_index = 409, .children_len = 3, .end_of_word = false }, // ff
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // fi
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // fj
-            .{ .child_index = 412, .children_len = 3, .end_of_word = false }, // fl
-            .{ .child_index = 415, .children_len = 1, .end_of_word = false }, // fn
-            .{ .child_index = 416, .children_len = 2, .end_of_word = false }, // fo
-            .{ .child_index = 418, .children_len = 1, .end_of_word = false }, // fp
-            .{ .child_index = 419, .children_len = 2, .end_of_word = false }, // fr
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // fs
-        },
-        .len = if (want_safety) 12 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // gE
-            .{ .number = 2 }, // ga
-            .{ .number = 6 }, // gb
-            .{ .number = 7 }, // gc
-            .{ .number = 9 }, // gd
-            .{ .number = 10 }, // ge
-            .{ .number = 22 }, // gf
-            .{ .number = 23 }, // gg
-            .{ .number = 25 }, // gi
-            .{ .number = 26 }, // gj
-            .{ .number = 27 }, // gl
-            .{ .number = 31 }, // gn
-            .{ .number = 38 }, // go
-            .{ .number = 39 }, // gr
-            .{ .number = 40 }, // gs
-            .{ .number = 44 }, // gt
-            .{ .number = 58 }, // gv
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 421, .children_len = 2, .end_of_word = false }, // gE
-            .{ .child_index = 423, .children_len = 3, .end_of_word = false }, // ga
-            .{ .child_index = 4, .children_len = 1, .end_of_word = false }, // gb
-            .{ .child_index = 113, .children_len = 2, .end_of_word = false }, // gc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // gd
-            .{ .child_index = 426, .children_len = 4, .end_of_word = false }, // ge
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // gf
-            .{ .child_index = 430, .children_len = 2, .end_of_word = false }, // gg
-            .{ .child_index = 432, .children_len = 1, .end_of_word = false }, // gi
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // gj
-            .{ .child_index = 433, .children_len = 4, .end_of_word = false }, // gl
-            .{ .child_index = 437, .children_len = 4, .end_of_word = false }, // gn
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // go
-            .{ .child_index = 441, .children_len = 1, .end_of_word = false }, // gr
-            .{ .child_index = 442, .children_len = 2, .end_of_word = false }, // gs
-            .{ .child_index = 444, .children_len = 6, .end_of_word = true }, // gt
-            .{ .child_index = 450, .children_len = 2, .end_of_word = false }, // gv
-        },
-        .len = if (want_safety) 17 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // hA
-            .{ .number = 1 }, // ha
-            .{ .number = 8 }, // hb
-            .{ .number = 9 }, // hc
-            .{ .number = 10 }, // he
-            .{ .number = 14 }, // hf
-            .{ .number = 15 }, // hk
-            .{ .number = 17 }, // ho
-            .{ .number = 23 }, // hs
-            .{ .number = 26 }, // hy
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 327, .children_len = 1, .end_of_word = false }, // hA
-            .{ .child_index = 452, .children_len = 4, .end_of_word = false }, // ha
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // hb
-            .{ .child_index = 96, .children_len = 1, .end_of_word = false }, // hc
-            .{ .child_index = 456, .children_len = 3, .end_of_word = false }, // he
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // hf
-            .{ .child_index = 459, .children_len = 1, .end_of_word = false }, // hk
-            .{ .child_index = 460, .children_len = 5, .end_of_word = false }, // ho
-            .{ .child_index = 465, .children_len = 3, .end_of_word = false }, // hs
-            .{ .child_index = 468, .children_len = 2, .end_of_word = false }, // hy
-        },
-        .len = if (want_safety) 10 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ia
-            .{ .number = 2 }, // ic
-            .{ .number = 6 }, // ie
-            .{ .number = 9 }, // if
-            .{ .number = 11 }, // ig
-            .{ .number = 13 }, // ii
-            .{ .number = 18 }, // ij
-            .{ .number = 19 }, // im
-            .{ .number = 26 }, // in
-            .{ .number = 37 }, // io
-            .{ .number = 41 }, // ip
-            .{ .number = 42 }, // iq
-            .{ .number = 44 }, // is
-            .{ .number = 51 }, // it
-            .{ .number = 53 }, // iu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 3, .children_len = 1, .end_of_word = false }, // ia
-            .{ .child_index = 470, .children_len = 3, .end_of_word = false }, // ic
-            .{ .child_index = 473, .children_len = 2, .end_of_word = false }, // ie
-            .{ .child_index = 475, .children_len = 2, .end_of_word = false }, // if
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // ig
-            .{ .child_index = 477, .children_len = 4, .end_of_word = false }, // ii
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // ij
-            .{ .child_index = 481, .children_len = 3, .end_of_word = false }, // im
-            .{ .child_index = 484, .children_len = 5, .end_of_word = false }, // in
-            .{ .child_index = 489, .children_len = 4, .end_of_word = false }, // io
-            .{ .child_index = 493, .children_len = 1, .end_of_word = false }, // ip
-            .{ .child_index = 494, .children_len = 1, .end_of_word = false }, // iq
-            .{ .child_index = 495, .children_len = 2, .end_of_word = false }, // is
-            .{ .child_index = 497, .children_len = 2, .end_of_word = false }, // it
-            .{ .child_index = 111, .children_len = 2, .end_of_word = false }, // iu
-        },
-        .len = if (want_safety) 15 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // jc
-            .{ .number = 2 }, // jf
-            .{ .number = 3 }, // jm
-            .{ .number = 4 }, // jo
-            .{ .number = 5 }, // js
-            .{ .number = 7 }, // ju
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 113, .children_len = 2, .end_of_word = false }, // jc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // jf
-            .{ .child_index = 499, .children_len = 1, .end_of_word = false }, // jm
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // jo
-            .{ .child_index = 115, .children_len = 2, .end_of_word = false }, // js
-            .{ .child_index = 117, .children_len = 1, .end_of_word = false }, // ju
-        },
-        .len = if (want_safety) 6 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ka
-            .{ .number = 2 }, // kc
-            .{ .number = 4 }, // kf
-            .{ .number = 5 }, // kg
-            .{ .number = 6 }, // kh
-            .{ .number = 7 }, // kj
-            .{ .number = 8 }, // ko
-            .{ .number = 9 }, // ks
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 500, .children_len = 1, .end_of_word = false }, // ka
-            .{ .child_index = 119, .children_len = 2, .end_of_word = false }, // kc
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // kf
-            .{ .child_index = 501, .children_len = 1, .end_of_word = false }, // kg
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // kh
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // kj
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // ko
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // ks
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // lA
-            .{ .number = 3 }, // lB
-            .{ .number = 4 }, // lE
-            .{ .number = 6 }, // lH
-            .{ .number = 7 }, // la
-            .{ .number = 30 }, // lb
-            .{ .number = 37 }, // lc
-            .{ .number = 42 }, // ld
-            .{ .number = 48 }, // le
-            .{ .number = 76 }, // lf
-            .{ .number = 79 }, // lg
-            .{ .number = 81 }, // lh
-            .{ .number = 85 }, // lj
-            .{ .number = 86 }, // ll
-            .{ .number = 91 }, // lm
-            .{ .number = 94 }, // ln
-            .{ .number = 101 }, // lo
-            .{ .number = 119 }, // lp
-            .{ .number = 121 }, // lr
-            .{ .number = 127 }, // ls
-            .{ .number = 137 }, // lt
-            .{ .number = 150 }, // lu
-            .{ .number = 152 }, // lv
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 502, .children_len = 3, .end_of_word = false }, // lA
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // lB
-            .{ .child_index = 430, .children_len = 2, .end_of_word = false }, // lE
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // lH
-            .{ .child_index = 505, .children_len = 9, .end_of_word = false }, // la
-            .{ .child_index = 514, .children_len = 3, .end_of_word = false }, // lb
-            .{ .child_index = 517, .children_len = 4, .end_of_word = false }, // lc
-            .{ .child_index = 521, .children_len = 4, .end_of_word = false }, // ld
-            .{ .child_index = 525, .children_len = 5, .end_of_word = false }, // le
-            .{ .child_index = 530, .children_len = 3, .end_of_word = false }, // lf
-            .{ .child_index = 533, .children_len = 2, .end_of_word = false }, // lg
-            .{ .child_index = 535, .children_len = 2, .end_of_word = false }, // lh
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // lj
-            .{ .child_index = 537, .children_len = 5, .end_of_word = false }, // ll
-            .{ .child_index = 542, .children_len = 2, .end_of_word = false }, // lm
-            .{ .child_index = 437, .children_len = 4, .end_of_word = false }, // ln
-            .{ .child_index = 544, .children_len = 8, .end_of_word = false }, // lo
-            .{ .child_index = 552, .children_len = 1, .end_of_word = false }, // lp
-            .{ .child_index = 553, .children_len = 5, .end_of_word = false }, // lr
-            .{ .child_index = 558, .children_len = 6, .end_of_word = false }, // ls
-            .{ .child_index = 564, .children_len = 8, .end_of_word = true }, // lt
-            .{ .child_index = 572, .children_len = 1, .end_of_word = false }, // lu
-            .{ .child_index = 450, .children_len = 2, .end_of_word = false }, // lv
-        },
-        .len = if (want_safety) 23 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // mD
-            .{ .number = 1 }, // ma
-            .{ .number = 12 }, // mc
-            .{ .number = 14 }, // md
-            .{ .number = 15 }, // me
-            .{ .number = 16 }, // mf
-            .{ .number = 17 }, // mh
-            .{ .number = 18 }, // mi
-            .{ .number = 29 }, // ml
-            .{ .number = 31 }, // mn
-            .{ .number = 32 }, // mo
-            .{ .number = 34 }, // mp
-            .{ .number = 35 }, // ms
-            .{ .number = 37 }, // mu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 573, .children_len = 1, .end_of_word = false }, // mD
-            .{ .child_index = 574, .children_len = 4, .end_of_word = false }, // ma
-            .{ .child_index = 578, .children_len = 2, .end_of_word = false }, // mc
-            .{ .child_index = 229, .children_len = 1, .end_of_word = false }, // md
-            .{ .child_index = 580, .children_len = 1, .end_of_word = false }, // me
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // mf
-            .{ .child_index = 179, .children_len = 1, .end_of_word = false }, // mh
-            .{ .child_index = 581, .children_len = 3, .end_of_word = false }, // mi
-            .{ .child_index = 584, .children_len = 2, .end_of_word = false }, // ml
-            .{ .child_index = 586, .children_len = 1, .end_of_word = false }, // mn
-            .{ .child_index = 587, .children_len = 2, .end_of_word = false }, // mo
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // mp
-            .{ .child_index = 589, .children_len = 2, .end_of_word = false }, // ms
-            .{ .child_index = 591, .children_len = 3, .end_of_word = false }, // mu
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // nG
-            .{ .number = 3 }, // nL
-            .{ .number = 8 }, // nR
-            .{ .number = 9 }, // nV
-            .{ .number = 11 }, // na
-            .{ .number = 22 }, // nb
-            .{ .number = 26 }, // nc
-            .{ .number = 33 }, // nd
-            .{ .number = 34 }, // ne
-            .{ .number = 45 }, // nf
-            .{ .number = 46 }, // ng
-            .{ .number = 55 }, // nh
-            .{ .number = 58 }, // ni
-            .{ .number = 62 }, // nj
-            .{ .number = 63 }, // nl
-            .{ .number = 79 }, // nm
-            .{ .number = 80 }, // no
-            .{ .number = 93 }, // np
-            .{ .number = 103 }, // nr
-            .{ .number = 110 }, // ns
-            .{ .number = 137 }, // nt
-            .{ .number = 145 }, // nu
-            .{ .number = 149 }, // nv
-            .{ .number = 163 }, // nw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 594, .children_len = 2, .end_of_word = false }, // nG
-            .{ .child_index = 596, .children_len = 3, .end_of_word = false }, // nL
-            .{ .child_index = 183, .children_len = 1, .end_of_word = false }, // nR
-            .{ .child_index = 599, .children_len = 2, .end_of_word = false }, // nV
-            .{ .child_index = 601, .children_len = 5, .end_of_word = false }, // na
-            .{ .child_index = 606, .children_len = 2, .end_of_word = false }, // nb
-            .{ .child_index = 608, .children_len = 5, .end_of_word = false }, // nc
-            .{ .child_index = 229, .children_len = 1, .end_of_word = false }, // nd
-            .{ .child_index = 613, .children_len = 7, .end_of_word = false }, // ne
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // nf
-            .{ .child_index = 620, .children_len = 4, .end_of_word = false }, // ng
-            .{ .child_index = 624, .children_len = 3, .end_of_word = false }, // nh
-            .{ .child_index = 627, .children_len = 3, .end_of_word = false }, // ni
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // nj
-            .{ .child_index = 630, .children_len = 7, .end_of_word = false }, // nl
-            .{ .child_index = 637, .children_len = 1, .end_of_word = false }, // nm
-            .{ .child_index = 638, .children_len = 2, .end_of_word = false }, // no
-            .{ .child_index = 640, .children_len = 3, .end_of_word = false }, // np
-            .{ .child_index = 643, .children_len = 4, .end_of_word = false }, // nr
-            .{ .child_index = 647, .children_len = 7, .end_of_word = false }, // ns
-            .{ .child_index = 654, .children_len = 4, .end_of_word = false }, // nt
-            .{ .child_index = 658, .children_len = 2, .end_of_word = false }, // nu
-            .{ .child_index = 660, .children_len = 9, .end_of_word = false }, // nv
-            .{ .child_index = 669, .children_len = 3, .end_of_word = false }, // nw
-        },
-        .len = if (want_safety) 24 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // oS
-            .{ .number = 1 }, // oa
-            .{ .number = 4 }, // oc
-            .{ .number = 8 }, // od
-            .{ .number = 13 }, // oe
-            .{ .number = 14 }, // of
-            .{ .number = 16 }, // og
-            .{ .number = 20 }, // oh
-            .{ .number = 22 }, // oi
-            .{ .number = 23 }, // ol
-            .{ .number = 28 }, // om
-            .{ .number = 33 }, // oo
-            .{ .number = 34 }, // op
-            .{ .number = 37 }, // or
-            .{ .number = 50 }, // os
-            .{ .number = 54 }, // ot
-            .{ .number = 58 }, // ou
-            .{ .number = 60 }, // ov
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // oS
-            .{ .child_index = 672, .children_len = 2, .end_of_word = false }, // oa
-            .{ .child_index = 674, .children_len = 2, .end_of_word = false }, // oc
-            .{ .child_index = 676, .children_len = 5, .end_of_word = false }, // od
-            .{ .child_index = 101, .children_len = 1, .end_of_word = false }, // oe
-            .{ .child_index = 681, .children_len = 2, .end_of_word = false }, // of
-            .{ .child_index = 683, .children_len = 3, .end_of_word = false }, // og
-            .{ .child_index = 686, .children_len = 2, .end_of_word = false }, // oh
-            .{ .child_index = 688, .children_len = 1, .end_of_word = false }, // oi
-            .{ .child_index = 689, .children_len = 4, .end_of_word = false }, // ol
-            .{ .child_index = 693, .children_len = 3, .end_of_word = false }, // om
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // oo
-            .{ .child_index = 696, .children_len = 3, .end_of_word = false }, // op
-            .{ .child_index = 699, .children_len = 7, .end_of_word = false }, // or
-            .{ .child_index = 706, .children_len = 3, .end_of_word = false }, // os
-            .{ .child_index = 709, .children_len = 1, .end_of_word = false }, // ot
-            .{ .child_index = 19, .children_len = 1, .end_of_word = false }, // ou
-            .{ .child_index = 710, .children_len = 1, .end_of_word = false }, // ov
-        },
-        .len = if (want_safety) 18 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // pa
-            .{ .number = 7 }, // pc
-            .{ .number = 8 }, // pe
-            .{ .number = 13 }, // pf
-            .{ .number = 14 }, // ph
-            .{ .number = 18 }, // pi
-            .{ .number = 21 }, // pl
-            .{ .number = 35 }, // pm
-            .{ .number = 36 }, // po
-            .{ .number = 40 }, // pr
-            .{ .number = 66 }, // ps
-            .{ .number = 68 }, // pu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 711, .children_len = 1, .end_of_word = false }, // pa
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // pc
-            .{ .child_index = 712, .children_len = 1, .end_of_word = false }, // pe
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // pf
-            .{ .child_index = 713, .children_len = 3, .end_of_word = false }, // ph
-            .{ .child_index = 716, .children_len = 3, .end_of_word = false }, // pi
-            .{ .child_index = 719, .children_len = 2, .end_of_word = false }, // pl
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // pm
-            .{ .child_index = 721, .children_len = 3, .end_of_word = false }, // po
-            .{ .child_index = 724, .children_len = 10, .end_of_word = false }, // pr
-            .{ .child_index = 169, .children_len = 2, .end_of_word = false }, // ps
-            .{ .child_index = 734, .children_len = 1, .end_of_word = false }, // pu
-        },
-        .len = if (want_safety) 12 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // qf
-            .{ .number = 1 }, // qi
-            .{ .number = 2 }, // qo
-            .{ .number = 3 }, // qp
-            .{ .number = 4 }, // qs
-            .{ .number = 5 }, // qu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // qf
-            .{ .child_index = 688, .children_len = 1, .end_of_word = false }, // qi
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // qo
-            .{ .child_index = 286, .children_len = 1, .end_of_word = false }, // qp
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // qs
-            .{ .child_index = 735, .children_len = 3, .end_of_word = false }, // qu
-        },
-        .len = if (want_safety) 6 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // rA
-            .{ .number = 3 }, // rB
-            .{ .number = 4 }, // rH
-            .{ .number = 5 }, // ra
-            .{ .number = 30 }, // rb
-            .{ .number = 37 }, // rc
-            .{ .number = 42 }, // rd
-            .{ .number = 47 }, // re
-            .{ .number = 54 }, // rf
-            .{ .number = 57 }, // rh
-            .{ .number = 62 }, // ri
-            .{ .number = 73 }, // rl
-            .{ .number = 76 }, // rm
-            .{ .number = 78 }, // rn
-            .{ .number = 79 }, // ro
-            .{ .number = 86 }, // rp
-            .{ .number = 89 }, // rr
-            .{ .number = 90 }, // rs
-            .{ .number = 96 }, // rt
-            .{ .number = 102 }, // ru
-            .{ .number = 103 }, // rx
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 502, .children_len = 3, .end_of_word = false }, // rA
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // rB
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // rH
-            .{ .child_index = 738, .children_len = 7, .end_of_word = false }, // ra
-            .{ .child_index = 514, .children_len = 3, .end_of_word = false }, // rb
-            .{ .child_index = 517, .children_len = 4, .end_of_word = false }, // rc
-            .{ .child_index = 745, .children_len = 4, .end_of_word = false }, // rd
-            .{ .child_index = 749, .children_len = 3, .end_of_word = false }, // re
-            .{ .child_index = 530, .children_len = 3, .end_of_word = false }, // rf
-            .{ .child_index = 752, .children_len = 2, .end_of_word = false }, // rh
-            .{ .child_index = 754, .children_len = 3, .end_of_word = false }, // ri
-            .{ .child_index = 757, .children_len = 3, .end_of_word = false }, // rl
-            .{ .child_index = 760, .children_len = 1, .end_of_word = false }, // rm
-            .{ .child_index = 761, .children_len = 1, .end_of_word = false }, // rn
-            .{ .child_index = 762, .children_len = 4, .end_of_word = false }, // ro
-            .{ .child_index = 766, .children_len = 2, .end_of_word = false }, // rp
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // rr
-            .{ .child_index = 768, .children_len = 4, .end_of_word = false }, // rs
-            .{ .child_index = 772, .children_len = 3, .end_of_word = false }, // rt
-            .{ .child_index = 775, .children_len = 1, .end_of_word = false }, // ru
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // rx
-        },
-        .len = if (want_safety) 21 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // sa
-            .{ .number = 1 }, // sb
-            .{ .number = 2 }, // sc
-            .{ .number = 16 }, // sd
-            .{ .number = 19 }, // se
-            .{ .number = 30 }, // sf
-            .{ .number = 32 }, // sh
-            .{ .number = 39 }, // si
-            .{ .number = 53 }, // sl
-            .{ .number = 54 }, // sm
-            .{ .number = 62 }, // so
-            .{ .number = 67 }, // sp
-            .{ .number = 70 }, // sq
-            .{ .number = 86 }, // sr
-            .{ .number = 87 }, // ss
-            .{ .number = 91 }, // st
-            .{ .number = 96 }, // su
-            .{ .number = 151 }, // sw
-            .{ .number = 156 }, // sz
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 144, .children_len = 1, .end_of_word = false }, // sa
-            .{ .child_index = 269, .children_len = 1, .end_of_word = false }, // sb
-            .{ .child_index = 776, .children_len = 10, .end_of_word = false }, // sc
-            .{ .child_index = 786, .children_len = 1, .end_of_word = false }, // sd
-            .{ .child_index = 787, .children_len = 7, .end_of_word = false }, // se
-            .{ .child_index = 794, .children_len = 1, .end_of_word = false }, // sf
-            .{ .child_index = 795, .children_len = 4, .end_of_word = false }, // sh
-            .{ .child_index = 799, .children_len = 2, .end_of_word = false }, // si
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // sl
-            .{ .child_index = 801, .children_len = 4, .end_of_word = false }, // sm
-            .{ .child_index = 805, .children_len = 3, .end_of_word = false }, // so
-            .{ .child_index = 808, .children_len = 1, .end_of_word = false }, // sp
-            .{ .child_index = 809, .children_len = 3, .end_of_word = false }, // sq
-            .{ .child_index = 172, .children_len = 1, .end_of_word = false }, // sr
-            .{ .child_index = 812, .children_len = 4, .end_of_word = false }, // ss
-            .{ .child_index = 816, .children_len = 2, .end_of_word = false }, // st
-            .{ .child_index = 818, .children_len = 5, .end_of_word = false }, // su
-            .{ .child_index = 823, .children_len = 3, .end_of_word = false }, // sw
-            .{ .child_index = 1, .children_len = 1, .end_of_word = false }, // sz
-        },
-        .len = if (want_safety) 19 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ta
-            .{ .number = 2 }, // tb
-            .{ .number = 3 }, // tc
-            .{ .number = 6 }, // td
-            .{ .number = 7 }, // te
-            .{ .number = 8 }, // tf
-            .{ .number = 9 }, // th
-            .{ .number = 21 }, // ti
-            .{ .number = 28 }, // to
-            .{ .number = 35 }, // tp
-            .{ .number = 36 }, // tr
-            .{ .number = 51 }, // ts
-            .{ .number = 55 }, // tw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 826, .children_len = 2, .end_of_word = false }, // ta
-            .{ .child_index = 828, .children_len = 1, .end_of_word = false }, // tb
-            .{ .child_index = 126, .children_len = 3, .end_of_word = false }, // tc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // td
-            .{ .child_index = 829, .children_len = 1, .end_of_word = false }, // te
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // tf
-            .{ .child_index = 830, .children_len = 4, .end_of_word = false }, // th
-            .{ .child_index = 834, .children_len = 3, .end_of_word = false }, // ti
-            .{ .child_index = 837, .children_len = 3, .end_of_word = false }, // to
-            .{ .child_index = 286, .children_len = 1, .end_of_word = false }, // tp
-            .{ .child_index = 840, .children_len = 3, .end_of_word = false }, // tr
-            .{ .child_index = 843, .children_len = 3, .end_of_word = false }, // ts
-            .{ .child_index = 846, .children_len = 2, .end_of_word = false }, // tw
-        },
-        .len = if (want_safety) 13 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // uA
-            .{ .number = 1 }, // uH
-            .{ .number = 2 }, // ua
-            .{ .number = 5 }, // ub
-            .{ .number = 7 }, // uc
-            .{ .number = 10 }, // ud
-            .{ .number = 13 }, // uf
-            .{ .number = 15 }, // ug
-            .{ .number = 17 }, // uh
-            .{ .number = 20 }, // ul
-            .{ .number = 24 }, // um
-            .{ .number = 27 }, // uo
-            .{ .number = 29 }, // up
-            .{ .number = 38 }, // ur
-            .{ .number = 43 }, // us
-            .{ .number = 44 }, // ut
-            .{ .number = 48 }, // uu
-            .{ .number = 51 }, // uw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 327, .children_len = 1, .end_of_word = false }, // uA
-            .{ .child_index = 200, .children_len = 1, .end_of_word = false }, // uH
-            .{ .child_index = 848, .children_len = 2, .end_of_word = false }, // ua
-            .{ .child_index = 217, .children_len = 1, .end_of_word = false }, // ub
-            .{ .child_index = 5, .children_len = 2, .end_of_word = false }, // uc
-            .{ .child_index = 850, .children_len = 3, .end_of_word = false }, // ud
-            .{ .child_index = 340, .children_len = 2, .end_of_word = false }, // uf
-            .{ .child_index = 8, .children_len = 1, .end_of_word = false }, // ug
-            .{ .child_index = 853, .children_len = 2, .end_of_word = false }, // uh
-            .{ .child_index = 855, .children_len = 2, .end_of_word = false }, // ul
-            .{ .child_index = 857, .children_len = 2, .end_of_word = false }, // um
-            .{ .child_index = 12, .children_len = 2, .end_of_word = false }, // uo
-            .{ .child_index = 859, .children_len = 6, .end_of_word = false }, // up
-            .{ .child_index = 865, .children_len = 3, .end_of_word = false }, // ur
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // us
-            .{ .child_index = 868, .children_len = 3, .end_of_word = false }, // ut
-            .{ .child_index = 871, .children_len = 2, .end_of_word = false }, // uu
-            .{ .child_index = 363, .children_len = 1, .end_of_word = false }, // uw
-        },
-        .len = if (want_safety) 18 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // vA
-            .{ .number = 1 }, // vB
-            .{ .number = 3 }, // vD
-            .{ .number = 4 }, // va
-            .{ .number = 21 }, // vc
-            .{ .number = 22 }, // vd
-            .{ .number = 23 }, // ve
-            .{ .number = 29 }, // vf
-            .{ .number = 30 }, // vl
-            .{ .number = 31 }, // vn
-            .{ .number = 33 }, // vo
-            .{ .number = 34 }, // vp
-            .{ .number = 35 }, // vr
-            .{ .number = 36 }, // vs
-            .{ .number = 41 }, // vz
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 327, .children_len = 1, .end_of_word = false }, // vA
-            .{ .child_index = 873, .children_len = 1, .end_of_word = false }, // vB
-            .{ .child_index = 229, .children_len = 1, .end_of_word = false }, // vD
-            .{ .child_index = 874, .children_len = 2, .end_of_word = false }, // va
-            .{ .child_index = 22, .children_len = 1, .end_of_word = false }, // vc
-            .{ .child_index = 229, .children_len = 1, .end_of_word = false }, // vd
-            .{ .child_index = 876, .children_len = 3, .end_of_word = false }, // ve
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // vf
-            .{ .child_index = 879, .children_len = 1, .end_of_word = false }, // vl
-            .{ .child_index = 880, .children_len = 1, .end_of_word = false }, // vn
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // vo
-            .{ .child_index = 881, .children_len = 1, .end_of_word = false }, // vp
-            .{ .child_index = 879, .children_len = 1, .end_of_word = false }, // vr
-            .{ .child_index = 882, .children_len = 2, .end_of_word = false }, // vs
-            .{ .child_index = 884, .children_len = 1, .end_of_word = false }, // vz
-        },
-        .len = if (want_safety) 15 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // wc
-            .{ .number = 1 }, // we
-            .{ .number = 5 }, // wf
-            .{ .number = 6 }, // wo
-            .{ .number = 7 }, // wp
-            .{ .number = 8 }, // wr
-            .{ .number = 10 }, // ws
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 96, .children_len = 1, .end_of_word = false }, // wc
-            .{ .child_index = 885, .children_len = 2, .end_of_word = false }, // we
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // wf
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // wo
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // wp
-            .{ .child_index = 887, .children_len = 2, .end_of_word = false }, // wr
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // ws
-        },
-        .len = if (want_safety) 7 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // xc
-            .{ .number = 3 }, // xd
-            .{ .number = 4 }, // xf
-            .{ .number = 5 }, // xh
-            .{ .number = 7 }, // xi
-            .{ .number = 8 }, // xl
-            .{ .number = 10 }, // xm
-            .{ .number = 11 }, // xn
-            .{ .number = 12 }, // xo
-            .{ .number = 16 }, // xr
-            .{ .number = 18 }, // xs
-            .{ .number = 20 }, // xu
-            .{ .number = 22 }, // xv
-            .{ .number = 23 }, // xw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 889, .children_len = 3, .end_of_word = false }, // xc
-            .{ .child_index = 879, .children_len = 1, .end_of_word = false }, // xd
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // xf
-            .{ .child_index = 892, .children_len = 2, .end_of_word = false }, // xh
-            .{ .child_index = 91, .children_len = 1, .end_of_word = false }, // xi
-            .{ .child_index = 892, .children_len = 2, .end_of_word = false }, // xl
-            .{ .child_index = 894, .children_len = 1, .end_of_word = false }, // xm
-            .{ .child_index = 895, .children_len = 1, .end_of_word = false }, // xn
-            .{ .child_index = 896, .children_len = 3, .end_of_word = false }, // xo
-            .{ .child_index = 892, .children_len = 2, .end_of_word = false }, // xr
-            .{ .child_index = 899, .children_len = 2, .end_of_word = false }, // xs
-            .{ .child_index = 901, .children_len = 2, .end_of_word = false }, // xu
-            .{ .child_index = 903, .children_len = 1, .end_of_word = false }, // xv
-            .{ .child_index = 904, .children_len = 1, .end_of_word = false }, // xw
-        },
-        .len = if (want_safety) 14 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // ya
-            .{ .number = 3 }, // yc
-            .{ .number = 5 }, // ye
-            .{ .number = 7 }, // yf
-            .{ .number = 8 }, // yi
-            .{ .number = 9 }, // yo
-            .{ .number = 10 }, // ys
-            .{ .number = 11 }, // yu
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 905, .children_len = 1, .end_of_word = false }, // ya
-            .{ .child_index = 113, .children_len = 2, .end_of_word = false }, // yc
-            .{ .child_index = 906, .children_len = 1, .end_of_word = false }, // ye
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // yf
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // yi
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // yo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // ys
-            .{ .child_index = 907, .children_len = 2, .end_of_word = false }, // yu
-        },
-        .len = if (want_safety) 8 else {},
-    },
-    .{
-        .numbers = &[_]SecondLayerNodes.Number{
-            .{ .number = 0 }, // za
-            .{ .number = 1 }, // zc
-            .{ .number = 3 }, // zd
-            .{ .number = 4 }, // ze
-            .{ .number = 6 }, // zf
-            .{ .number = 7 }, // zh
-            .{ .number = 8 }, // zi
-            .{ .number = 9 }, // zo
-            .{ .number = 10 }, // zs
-            .{ .number = 11 }, // zw
-        },
-        .infos = &[_]SecondLayerNodes.Info{
-            .{ .child_index = 144, .children_len = 1, .end_of_word = false }, // za
-            .{ .child_index = 56, .children_len = 2, .end_of_word = false }, // zc
-            .{ .child_index = 39, .children_len = 1, .end_of_word = false }, // zd
-            .{ .child_index = 909, .children_len = 2, .end_of_word = false }, // ze
-            .{ .child_index = 7, .children_len = 1, .end_of_word = false }, // zf
-            .{ .child_index = 30, .children_len = 1, .end_of_word = false }, // zh
-            .{ .child_index = 911, .children_len = 1, .end_of_word = false }, // zi
-            .{ .child_index = 26, .children_len = 1, .end_of_word = false }, // zo
-            .{ .child_index = 28, .children_len = 1, .end_of_word = false }, // zs
-            .{ .child_index = 912, .children_len = 2, .end_of_word = false }, // zw
-        },
-        .len = if (want_safety) 10 else {},
-    },
+pub const second_layer = [_]SecondLayerNode{
+    .{ .number = 0, .child_index = 1, .children_len = 1, .end_of_word = false }, // AE
+    .{ .number = 2, .child_index = 2, .children_len = 1, .end_of_word = false }, // AM
+    .{ .number = 4, .child_index = 3, .children_len = 1, .end_of_word = false }, // Aa
+    .{ .number = 6, .child_index = 4, .children_len = 1, .end_of_word = false }, // Ab
+    .{ .number = 7, .child_index = 5, .children_len = 2, .end_of_word = false }, // Ac
+    .{ .number = 10, .child_index = 7, .children_len = 1, .end_of_word = false }, // Af
+    .{ .number = 11, .child_index = 8, .children_len = 1, .end_of_word = false }, // Ag
+    .{ .number = 13, .child_index = 9, .children_len = 1, .end_of_word = false }, // Al
+    .{ .number = 14, .child_index = 10, .children_len = 1, .end_of_word = false }, // Am
+    .{ .number = 15, .child_index = 11, .children_len = 1, .end_of_word = false }, // An
+    .{ .number = 16, .child_index = 12, .children_len = 2, .end_of_word = false }, // Ao
+    .{ .number = 18, .child_index = 14, .children_len = 1, .end_of_word = false }, // Ap
+    .{ .number = 19, .child_index = 15, .children_len = 1, .end_of_word = false }, // Ar
+    .{ .number = 21, .child_index = 16, .children_len = 2, .end_of_word = false }, // As
+    .{ .number = 23, .child_index = 18, .children_len = 1, .end_of_word = false }, // At
+    .{ .number = 25, .child_index = 19, .children_len = 1, .end_of_word = false }, // Au
+    .{ .number = 0, .child_index = 20, .children_len = 2, .end_of_word = false }, // Ba
+    .{ .number = 3, .child_index = 22, .children_len = 1, .end_of_word = false }, // Bc
+    .{ .number = 4, .child_index = 23, .children_len = 3, .end_of_word = false }, // Be
+    .{ .number = 7, .child_index = 7, .children_len = 1, .end_of_word = false }, // Bf
+    .{ .number = 8, .child_index = 26, .children_len = 1, .end_of_word = false }, // Bo
+    .{ .number = 9, .child_index = 27, .children_len = 1, .end_of_word = false }, // Br
+    .{ .number = 10, .child_index = 28, .children_len = 1, .end_of_word = false }, // Bs
+    .{ .number = 11, .child_index = 29, .children_len = 1, .end_of_word = false }, // Bu
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // CH
+    .{ .number = 1, .child_index = 31, .children_len = 1, .end_of_word = false }, // CO
+    .{ .number = 3, .child_index = 32, .children_len = 3, .end_of_word = false }, // Ca
+    .{ .number = 7, .child_index = 35, .children_len = 4, .end_of_word = false }, // Cc
+    .{ .number = 12, .child_index = 39, .children_len = 1, .end_of_word = false }, // Cd
+    .{ .number = 13, .child_index = 40, .children_len = 2, .end_of_word = false }, // Ce
+    .{ .number = 15, .child_index = 7, .children_len = 1, .end_of_word = false }, // Cf
+    .{ .number = 16, .child_index = 42, .children_len = 1, .end_of_word = false }, // Ch
+    .{ .number = 17, .child_index = 43, .children_len = 1, .end_of_word = false }, // Ci
+    .{ .number = 21, .child_index = 44, .children_len = 1, .end_of_word = false }, // Cl
+    .{ .number = 24, .child_index = 45, .children_len = 4, .end_of_word = false }, // Co
+    .{ .number = 32, .child_index = 49, .children_len = 1, .end_of_word = false }, // Cr
+    .{ .number = 33, .child_index = 28, .children_len = 1, .end_of_word = false }, // Cs
+    .{ .number = 34, .child_index = 50, .children_len = 1, .end_of_word = false }, // Cu
+    .{ .number = 0, .child_index = 51, .children_len = 2, .end_of_word = false }, // DD
+    .{ .number = 2, .child_index = 30, .children_len = 1, .end_of_word = false }, // DJ
+    .{ .number = 3, .child_index = 30, .children_len = 1, .end_of_word = false }, // DS
+    .{ .number = 4, .child_index = 30, .children_len = 1, .end_of_word = false }, // DZ
+    .{ .number = 5, .child_index = 53, .children_len = 3, .end_of_word = false }, // Da
+    .{ .number = 8, .child_index = 56, .children_len = 2, .end_of_word = false }, // Dc
+    .{ .number = 10, .child_index = 58, .children_len = 1, .end_of_word = false }, // De
+    .{ .number = 12, .child_index = 7, .children_len = 1, .end_of_word = false }, // Df
+    .{ .number = 13, .child_index = 59, .children_len = 2, .end_of_word = false }, // Di
+    .{ .number = 20, .child_index = 61, .children_len = 4, .end_of_word = false }, // Do
+    .{ .number = 52, .child_index = 65, .children_len = 2, .end_of_word = false }, // Ds
+    .{ .number = 0, .child_index = 67, .children_len = 1, .end_of_word = false }, // EN
+    .{ .number = 1, .child_index = 68, .children_len = 1, .end_of_word = false }, // ET
+    .{ .number = 3, .child_index = 3, .children_len = 1, .end_of_word = false }, // Ea
+    .{ .number = 5, .child_index = 69, .children_len = 3, .end_of_word = false }, // Ec
+    .{ .number = 9, .child_index = 39, .children_len = 1, .end_of_word = false }, // Ed
+    .{ .number = 10, .child_index = 7, .children_len = 1, .end_of_word = false }, // Ef
+    .{ .number = 11, .child_index = 8, .children_len = 1, .end_of_word = false }, // Eg
+    .{ .number = 13, .child_index = 72, .children_len = 1, .end_of_word = false }, // El
+    .{ .number = 14, .child_index = 73, .children_len = 2, .end_of_word = false }, // Em
+    .{ .number = 17, .child_index = 12, .children_len = 2, .end_of_word = false }, // Eo
+    .{ .number = 19, .child_index = 75, .children_len = 1, .end_of_word = false }, // Ep
+    .{ .number = 20, .child_index = 76, .children_len = 1, .end_of_word = false }, // Eq
+    .{ .number = 23, .child_index = 77, .children_len = 2, .end_of_word = false }, // Es
+    .{ .number = 25, .child_index = 79, .children_len = 1, .end_of_word = false }, // Et
+    .{ .number = 26, .child_index = 19, .children_len = 1, .end_of_word = false }, // Eu
+    .{ .number = 28, .child_index = 80, .children_len = 2, .end_of_word = false }, // Ex
+    .{ .number = 0, .child_index = 22, .children_len = 1, .end_of_word = false }, // Fc
+    .{ .number = 1, .child_index = 7, .children_len = 1, .end_of_word = false }, // Ff
+    .{ .number = 2, .child_index = 82, .children_len = 1, .end_of_word = false }, // Fi
+    .{ .number = 4, .child_index = 83, .children_len = 3, .end_of_word = false }, // Fo
+    .{ .number = 7, .child_index = 28, .children_len = 1, .end_of_word = false }, // Fs
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // GJ
+    .{ .number = 1, .child_index = 86, .children_len = 1, .end_of_word = true }, // GT
+    .{ .number = 3, .child_index = 87, .children_len = 1, .end_of_word = false }, // Ga
+    .{ .number = 5, .child_index = 4, .children_len = 1, .end_of_word = false }, // Gb
+    .{ .number = 6, .child_index = 88, .children_len = 3, .end_of_word = false }, // Gc
+    .{ .number = 9, .child_index = 39, .children_len = 1, .end_of_word = false }, // Gd
+    .{ .number = 10, .child_index = 7, .children_len = 1, .end_of_word = false }, // Gf
+    .{ .number = 11, .child_index = 91, .children_len = 1, .end_of_word = false }, // Gg
+    .{ .number = 12, .child_index = 26, .children_len = 1, .end_of_word = false }, // Go
+    .{ .number = 13, .child_index = 92, .children_len = 1, .end_of_word = false }, // Gr
+    .{ .number = 20, .child_index = 28, .children_len = 1, .end_of_word = false }, // Gs
+    .{ .number = 21, .child_index = 91, .children_len = 1, .end_of_word = false }, // Gt
+    .{ .number = 0, .child_index = 93, .children_len = 1, .end_of_word = false }, // HA
+    .{ .number = 1, .child_index = 94, .children_len = 2, .end_of_word = false }, // Ha
+    .{ .number = 3, .child_index = 96, .children_len = 1, .end_of_word = false }, // Hc
+    .{ .number = 4, .child_index = 7, .children_len = 1, .end_of_word = false }, // Hf
+    .{ .number = 5, .child_index = 97, .children_len = 1, .end_of_word = false }, // Hi
+    .{ .number = 6, .child_index = 98, .children_len = 2, .end_of_word = false }, // Ho
+    .{ .number = 8, .child_index = 65, .children_len = 2, .end_of_word = false }, // Hs
+    .{ .number = 10, .child_index = 100, .children_len = 1, .end_of_word = false }, // Hu
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // IE
+    .{ .number = 1, .child_index = 101, .children_len = 1, .end_of_word = false }, // IJ
+    .{ .number = 2, .child_index = 30, .children_len = 1, .end_of_word = false }, // IO
+    .{ .number = 3, .child_index = 3, .children_len = 1, .end_of_word = false }, // Ia
+    .{ .number = 5, .child_index = 5, .children_len = 2, .end_of_word = false }, // Ic
+    .{ .number = 8, .child_index = 39, .children_len = 1, .end_of_word = false }, // Id
+    .{ .number = 9, .child_index = 7, .children_len = 1, .end_of_word = false }, // If
+    .{ .number = 10, .child_index = 8, .children_len = 1, .end_of_word = false }, // Ig
+    .{ .number = 12, .child_index = 102, .children_len = 3, .end_of_word = false }, // Im
+    .{ .number = 16, .child_index = 105, .children_len = 2, .end_of_word = false }, // In
+    .{ .number = 21, .child_index = 107, .children_len = 3, .end_of_word = false }, // Io
+    .{ .number = 24, .child_index = 28, .children_len = 1, .end_of_word = false }, // Is
+    .{ .number = 25, .child_index = 110, .children_len = 1, .end_of_word = false }, // It
+    .{ .number = 26, .child_index = 111, .children_len = 2, .end_of_word = false }, // Iu
+    .{ .number = 0, .child_index = 113, .children_len = 2, .end_of_word = false }, // Jc
+    .{ .number = 2, .child_index = 7, .children_len = 1, .end_of_word = false }, // Jf
+    .{ .number = 3, .child_index = 26, .children_len = 1, .end_of_word = false }, // Jo
+    .{ .number = 4, .child_index = 115, .children_len = 2, .end_of_word = false }, // Js
+    .{ .number = 6, .child_index = 117, .children_len = 1, .end_of_word = false }, // Ju
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // KH
+    .{ .number = 1, .child_index = 30, .children_len = 1, .end_of_word = false }, // KJ
+    .{ .number = 2, .child_index = 118, .children_len = 1, .end_of_word = false }, // Ka
+    .{ .number = 3, .child_index = 119, .children_len = 2, .end_of_word = false }, // Kc
+    .{ .number = 5, .child_index = 7, .children_len = 1, .end_of_word = false }, // Kf
+    .{ .number = 6, .child_index = 26, .children_len = 1, .end_of_word = false }, // Ko
+    .{ .number = 7, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ks
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // LJ
+    .{ .number = 1, .child_index = 86, .children_len = 1, .end_of_word = true }, // LT
+    .{ .number = 3, .child_index = 121, .children_len = 5, .end_of_word = false }, // La
+    .{ .number = 8, .child_index = 126, .children_len = 3, .end_of_word = false }, // Lc
+    .{ .number = 11, .child_index = 129, .children_len = 2, .end_of_word = false }, // Le
+    .{ .number = 43, .child_index = 7, .children_len = 1, .end_of_word = false }, // Lf
+    .{ .number = 44, .child_index = 131, .children_len = 2, .end_of_word = false }, // Ll
+    .{ .number = 46, .child_index = 133, .children_len = 1, .end_of_word = false }, // Lm
+    .{ .number = 47, .child_index = 134, .children_len = 3, .end_of_word = false }, // Lo
+    .{ .number = 56, .child_index = 137, .children_len = 3, .end_of_word = false }, // Ls
+    .{ .number = 59, .child_index = 91, .children_len = 1, .end_of_word = false }, // Lt
+    .{ .number = 0, .child_index = 140, .children_len = 1, .end_of_word = false }, // Ma
+    .{ .number = 1, .child_index = 22, .children_len = 1, .end_of_word = false }, // Mc
+    .{ .number = 2, .child_index = 141, .children_len = 2, .end_of_word = false }, // Me
+    .{ .number = 4, .child_index = 7, .children_len = 1, .end_of_word = false }, // Mf
+    .{ .number = 5, .child_index = 143, .children_len = 1, .end_of_word = false }, // Mi
+    .{ .number = 6, .child_index = 26, .children_len = 1, .end_of_word = false }, // Mo
+    .{ .number = 7, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ms
+    .{ .number = 8, .child_index = 91, .children_len = 1, .end_of_word = false }, // Mu
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // NJ
+    .{ .number = 1, .child_index = 144, .children_len = 1, .end_of_word = false }, // Na
+    .{ .number = 2, .child_index = 126, .children_len = 3, .end_of_word = false }, // Nc
+    .{ .number = 5, .child_index = 145, .children_len = 3, .end_of_word = false }, // Ne
+    .{ .number = 12, .child_index = 7, .children_len = 1, .end_of_word = false }, // Nf
+    .{ .number = 13, .child_index = 148, .children_len = 4, .end_of_word = false }, // No
+    .{ .number = 68, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ns
+    .{ .number = 69, .child_index = 18, .children_len = 1, .end_of_word = false }, // Nt
+    .{ .number = 71, .child_index = 91, .children_len = 1, .end_of_word = false }, // Nu
+    .{ .number = 0, .child_index = 101, .children_len = 1, .end_of_word = false }, // OE
+    .{ .number = 1, .child_index = 3, .children_len = 1, .end_of_word = false }, // Oa
+    .{ .number = 3, .child_index = 5, .children_len = 2, .end_of_word = false }, // Oc
+    .{ .number = 6, .child_index = 152, .children_len = 1, .end_of_word = false }, // Od
+    .{ .number = 7, .child_index = 7, .children_len = 1, .end_of_word = false }, // Of
+    .{ .number = 8, .child_index = 8, .children_len = 1, .end_of_word = false }, // Og
+    .{ .number = 10, .child_index = 153, .children_len = 3, .end_of_word = false }, // Om
+    .{ .number = 13, .child_index = 26, .children_len = 1, .end_of_word = false }, // Oo
+    .{ .number = 14, .child_index = 156, .children_len = 1, .end_of_word = false }, // Op
+    .{ .number = 16, .child_index = 91, .children_len = 1, .end_of_word = false }, // Or
+    .{ .number = 17, .child_index = 157, .children_len = 2, .end_of_word = false }, // Os
+    .{ .number = 20, .child_index = 159, .children_len = 1, .end_of_word = false }, // Ot
+    .{ .number = 23, .child_index = 19, .children_len = 1, .end_of_word = false }, // Ou
+    .{ .number = 25, .child_index = 160, .children_len = 1, .end_of_word = false }, // Ov
+    .{ .number = 0, .child_index = 161, .children_len = 1, .end_of_word = false }, // Pa
+    .{ .number = 1, .child_index = 22, .children_len = 1, .end_of_word = false }, // Pc
+    .{ .number = 2, .child_index = 7, .children_len = 1, .end_of_word = false }, // Pf
+    .{ .number = 3, .child_index = 42, .children_len = 1, .end_of_word = false }, // Ph
+    .{ .number = 4, .child_index = 91, .children_len = 1, .end_of_word = false }, // Pi
+    .{ .number = 5, .child_index = 162, .children_len = 1, .end_of_word = false }, // Pl
+    .{ .number = 6, .child_index = 163, .children_len = 2, .end_of_word = false }, // Po
+    .{ .number = 8, .child_index = 165, .children_len = 4, .end_of_word = false }, // Pr
+    .{ .number = 17, .child_index = 169, .children_len = 2, .end_of_word = false }, // Ps
+    .{ .number = 0, .child_index = 171, .children_len = 1, .end_of_word = false }, // QU
+    .{ .number = 2, .child_index = 7, .children_len = 1, .end_of_word = false }, // Qf
+    .{ .number = 3, .child_index = 26, .children_len = 1, .end_of_word = false }, // Qo
+    .{ .number = 4, .child_index = 28, .children_len = 1, .end_of_word = false }, // Qs
+    .{ .number = 0, .child_index = 172, .children_len = 1, .end_of_word = false }, // RB
+    .{ .number = 1, .child_index = 173, .children_len = 1, .end_of_word = false }, // RE
+    .{ .number = 3, .child_index = 174, .children_len = 3, .end_of_word = false }, // Ra
+    .{ .number = 7, .child_index = 126, .children_len = 3, .end_of_word = false }, // Rc
+    .{ .number = 10, .child_index = 177, .children_len = 2, .end_of_word = false }, // Re
+    .{ .number = 14, .child_index = 7, .children_len = 1, .end_of_word = false }, // Rf
+    .{ .number = 15, .child_index = 179, .children_len = 1, .end_of_word = false }, // Rh
+    .{ .number = 16, .child_index = 180, .children_len = 1, .end_of_word = false }, // Ri
+    .{ .number = 39, .child_index = 181, .children_len = 2, .end_of_word = false }, // Ro
+    .{ .number = 41, .child_index = 183, .children_len = 1, .end_of_word = false }, // Rr
+    .{ .number = 42, .child_index = 184, .children_len = 2, .end_of_word = false }, // Rs
+    .{ .number = 44, .child_index = 186, .children_len = 1, .end_of_word = false }, // Ru
+    .{ .number = 0, .child_index = 187, .children_len = 2, .end_of_word = false }, // SH
+    .{ .number = 2, .child_index = 189, .children_len = 1, .end_of_word = false }, // SO
+    .{ .number = 3, .child_index = 144, .children_len = 1, .end_of_word = false }, // Sa
+    .{ .number = 4, .child_index = 190, .children_len = 5, .end_of_word = false }, // Sc
+    .{ .number = 9, .child_index = 7, .children_len = 1, .end_of_word = false }, // Sf
+    .{ .number = 10, .child_index = 195, .children_len = 1, .end_of_word = false }, // Sh
+    .{ .number = 14, .child_index = 196, .children_len = 1, .end_of_word = false }, // Si
+    .{ .number = 15, .child_index = 197, .children_len = 1, .end_of_word = false }, // Sm
+    .{ .number = 16, .child_index = 26, .children_len = 1, .end_of_word = false }, // So
+    .{ .number = 17, .child_index = 198, .children_len = 2, .end_of_word = false }, // Sq
+    .{ .number = 25, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ss
+    .{ .number = 26, .child_index = 200, .children_len = 1, .end_of_word = false }, // St
+    .{ .number = 27, .child_index = 201, .children_len = 4, .end_of_word = false }, // Su
+    .{ .number = 0, .child_index = 205, .children_len = 1, .end_of_word = false }, // TH
+    .{ .number = 2, .child_index = 206, .children_len = 1, .end_of_word = false }, // TR
+    .{ .number = 3, .child_index = 207, .children_len = 2, .end_of_word = false }, // TS
+    .{ .number = 5, .child_index = 209, .children_len = 2, .end_of_word = false }, // Ta
+    .{ .number = 7, .child_index = 126, .children_len = 3, .end_of_word = false }, // Tc
+    .{ .number = 10, .child_index = 7, .children_len = 1, .end_of_word = false }, // Tf
+    .{ .number = 11, .child_index = 211, .children_len = 2, .end_of_word = false }, // Th
+    .{ .number = 15, .child_index = 213, .children_len = 1, .end_of_word = false }, // Ti
+    .{ .number = 19, .child_index = 26, .children_len = 1, .end_of_word = false }, // To
+    .{ .number = 20, .child_index = 214, .children_len = 1, .end_of_word = false }, // Tr
+    .{ .number = 21, .child_index = 65, .children_len = 2, .end_of_word = false }, // Ts
+    .{ .number = 0, .child_index = 215, .children_len = 2, .end_of_word = false }, // Ua
+    .{ .number = 4, .child_index = 217, .children_len = 1, .end_of_word = false }, // Ub
+    .{ .number = 6, .child_index = 5, .children_len = 2, .end_of_word = false }, // Uc
+    .{ .number = 9, .child_index = 152, .children_len = 1, .end_of_word = false }, // Ud
+    .{ .number = 10, .child_index = 7, .children_len = 1, .end_of_word = false }, // Uf
+    .{ .number = 11, .child_index = 8, .children_len = 1, .end_of_word = false }, // Ug
+    .{ .number = 13, .child_index = 10, .children_len = 1, .end_of_word = false }, // Um
+    .{ .number = 14, .child_index = 218, .children_len = 2, .end_of_word = false }, // Un
+    .{ .number = 20, .child_index = 12, .children_len = 2, .end_of_word = false }, // Uo
+    .{ .number = 22, .child_index = 220, .children_len = 8, .end_of_word = false }, // Up
+    .{ .number = 35, .child_index = 228, .children_len = 1, .end_of_word = false }, // Ur
+    .{ .number = 36, .child_index = 28, .children_len = 1, .end_of_word = false }, // Us
+    .{ .number = 37, .child_index = 110, .children_len = 1, .end_of_word = false }, // Ut
+    .{ .number = 38, .child_index = 19, .children_len = 1, .end_of_word = false }, // Uu
+    .{ .number = 0, .child_index = 229, .children_len = 1, .end_of_word = false }, // VD
+    .{ .number = 1, .child_index = 200, .children_len = 1, .end_of_word = false }, // Vb
+    .{ .number = 2, .child_index = 22, .children_len = 1, .end_of_word = false }, // Vc
+    .{ .number = 3, .child_index = 230, .children_len = 1, .end_of_word = false }, // Vd
+    .{ .number = 5, .child_index = 231, .children_len = 2, .end_of_word = false }, // Ve
+    .{ .number = 13, .child_index = 7, .children_len = 1, .end_of_word = false }, // Vf
+    .{ .number = 14, .child_index = 26, .children_len = 1, .end_of_word = false }, // Vo
+    .{ .number = 15, .child_index = 28, .children_len = 1, .end_of_word = false }, // Vs
+    .{ .number = 16, .child_index = 233, .children_len = 1, .end_of_word = false }, // Vv
+    .{ .number = 0, .child_index = 96, .children_len = 1, .end_of_word = false }, // Wc
+    .{ .number = 1, .child_index = 234, .children_len = 1, .end_of_word = false }, // We
+    .{ .number = 2, .child_index = 7, .children_len = 1, .end_of_word = false }, // Wf
+    .{ .number = 3, .child_index = 26, .children_len = 1, .end_of_word = false }, // Wo
+    .{ .number = 4, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ws
+    .{ .number = 0, .child_index = 7, .children_len = 1, .end_of_word = false }, // Xf
+    .{ .number = 1, .child_index = 91, .children_len = 1, .end_of_word = false }, // Xi
+    .{ .number = 2, .child_index = 26, .children_len = 1, .end_of_word = false }, // Xo
+    .{ .number = 3, .child_index = 28, .children_len = 1, .end_of_word = false }, // Xs
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // YA
+    .{ .number = 1, .child_index = 30, .children_len = 1, .end_of_word = false }, // YI
+    .{ .number = 2, .child_index = 30, .children_len = 1, .end_of_word = false }, // YU
+    .{ .number = 3, .child_index = 3, .children_len = 1, .end_of_word = false }, // Ya
+    .{ .number = 5, .child_index = 113, .children_len = 2, .end_of_word = false }, // Yc
+    .{ .number = 7, .child_index = 7, .children_len = 1, .end_of_word = false }, // Yf
+    .{ .number = 8, .child_index = 26, .children_len = 1, .end_of_word = false }, // Yo
+    .{ .number = 9, .child_index = 28, .children_len = 1, .end_of_word = false }, // Ys
+    .{ .number = 10, .child_index = 235, .children_len = 1, .end_of_word = false }, // Yu
+    .{ .number = 0, .child_index = 30, .children_len = 1, .end_of_word = false }, // ZH
+    .{ .number = 1, .child_index = 144, .children_len = 1, .end_of_word = false }, // Za
+    .{ .number = 2, .child_index = 56, .children_len = 2, .end_of_word = false }, // Zc
+    .{ .number = 4, .child_index = 39, .children_len = 1, .end_of_word = false }, // Zd
+    .{ .number = 5, .child_index = 236, .children_len = 2, .end_of_word = false }, // Ze
+    .{ .number = 7, .child_index = 7, .children_len = 1, .end_of_word = false }, // Zf
+    .{ .number = 8, .child_index = 26, .children_len = 1, .end_of_word = false }, // Zo
+    .{ .number = 9, .child_index = 28, .children_len = 1, .end_of_word = false }, // Zs
+    .{ .number = 0, .child_index = 3, .children_len = 1, .end_of_word = false }, // aa
+    .{ .number = 2, .child_index = 4, .children_len = 1, .end_of_word = false }, // ab
+    .{ .number = 3, .child_index = 238, .children_len = 6, .end_of_word = false }, // ac
+    .{ .number = 11, .child_index = 1, .children_len = 1, .end_of_word = false }, // ae
+    .{ .number = 13, .child_index = 244, .children_len = 2, .end_of_word = false }, // af
+    .{ .number = 15, .child_index = 8, .children_len = 1, .end_of_word = false }, // ag
+    .{ .number = 17, .child_index = 246, .children_len = 2, .end_of_word = false }, // al
+    .{ .number = 20, .child_index = 248, .children_len = 2, .end_of_word = false }, // am
+    .{ .number = 24, .child_index = 250, .children_len = 2, .end_of_word = false }, // an
+    .{ .number = 47, .child_index = 12, .children_len = 2, .end_of_word = false }, // ao
+    .{ .number = 49, .child_index = 252, .children_len = 7, .end_of_word = false }, // ap
+    .{ .number = 57, .child_index = 15, .children_len = 1, .end_of_word = false }, // ar
+    .{ .number = 59, .child_index = 259, .children_len = 3, .end_of_word = false }, // as
+    .{ .number = 63, .child_index = 18, .children_len = 1, .end_of_word = false }, // at
+    .{ .number = 65, .child_index = 19, .children_len = 1, .end_of_word = false }, // au
+    .{ .number = 67, .child_index = 262, .children_len = 2, .end_of_word = false }, // aw
+    .{ .number = 0, .child_index = 39, .children_len = 1, .end_of_word = false }, // bN
+    .{ .number = 1, .child_index = 264, .children_len = 2, .end_of_word = false }, // ba
+    .{ .number = 9, .child_index = 266, .children_len = 1, .end_of_word = false }, // bb
+    .{ .number = 11, .child_index = 267, .children_len = 2, .end_of_word = false }, // bc
+    .{ .number = 13, .child_index = 269, .children_len = 1, .end_of_word = false }, // bd
+    .{ .number = 14, .child_index = 270, .children_len = 5, .end_of_word = false }, // be
+    .{ .number = 22, .child_index = 7, .children_len = 1, .end_of_word = false }, // bf
+    .{ .number = 23, .child_index = 275, .children_len = 1, .end_of_word = false }, // bi
+    .{ .number = 36, .child_index = 276, .children_len = 1, .end_of_word = false }, // bk
+    .{ .number = 37, .child_index = 277, .children_len = 3, .end_of_word = false }, // bl
+    .{ .number = 48, .child_index = 280, .children_len = 2, .end_of_word = false }, // bn
+    .{ .number = 51, .child_index = 282, .children_len = 4, .end_of_word = false }, // bo
+    .{ .number = 99, .child_index = 286, .children_len = 1, .end_of_word = false }, // bp
+    .{ .number = 100, .child_index = 287, .children_len = 2, .end_of_word = false }, // br
+    .{ .number = 103, .child_index = 289, .children_len = 4, .end_of_word = false }, // bs
+    .{ .number = 110, .child_index = 293, .children_len = 2, .end_of_word = false }, // bu
+    .{ .number = 0, .child_index = 295, .children_len = 3, .end_of_word = false }, // ca
+    .{ .number = 10, .child_index = 298, .children_len = 4, .end_of_word = false }, // cc
+    .{ .number = 17, .child_index = 39, .children_len = 1, .end_of_word = false }, // cd
+    .{ .number = 18, .child_index = 302, .children_len = 3, .end_of_word = false }, // ce
+    .{ .number = 24, .child_index = 7, .children_len = 1, .end_of_word = false }, // cf
+    .{ .number = 25, .child_index = 305, .children_len = 3, .end_of_word = false }, // ch
+    .{ .number = 29, .child_index = 308, .children_len = 1, .end_of_word = false }, // ci
+    .{ .number = 44, .child_index = 309, .children_len = 1, .end_of_word = false }, // cl
+    .{ .number = 46, .child_index = 310, .children_len = 4, .end_of_word = false }, // co
+    .{ .number = 63, .child_index = 314, .children_len = 2, .end_of_word = false }, // cr
+    .{ .number = 65, .child_index = 316, .children_len = 2, .end_of_word = false }, // cs
+    .{ .number = 70, .child_index = 318, .children_len = 1, .end_of_word = false }, // ct
+    .{ .number = 71, .child_index = 319, .children_len = 7, .end_of_word = false }, // cu
+    .{ .number = 96, .child_index = 262, .children_len = 2, .end_of_word = false }, // cw
+    .{ .number = 98, .child_index = 326, .children_len = 1, .end_of_word = false }, // cy
+    .{ .number = 0, .child_index = 327, .children_len = 1, .end_of_word = false }, // dA
+    .{ .number = 1, .child_index = 200, .children_len = 1, .end_of_word = false }, // dH
+    .{ .number = 2, .child_index = 328, .children_len = 4, .end_of_word = false }, // da
+    .{ .number = 7, .child_index = 332, .children_len = 2, .end_of_word = false }, // db
+    .{ .number = 9, .child_index = 56, .children_len = 2, .end_of_word = false }, // dc
+    .{ .number = 11, .child_index = 334, .children_len = 3, .end_of_word = false }, // dd
+    .{ .number = 15, .child_index = 337, .children_len = 3, .end_of_word = false }, // de
+    .{ .number = 19, .child_index = 340, .children_len = 2, .end_of_word = false }, // df
+    .{ .number = 21, .child_index = 342, .children_len = 1, .end_of_word = false }, // dh
+    .{ .number = 23, .child_index = 343, .children_len = 5, .end_of_word = false }, // di
+    .{ .number = 35, .child_index = 30, .children_len = 1, .end_of_word = false }, // dj
+    .{ .number = 36, .child_index = 348, .children_len = 1, .end_of_word = false }, // dl
+    .{ .number = 38, .child_index = 349, .children_len = 5, .end_of_word = false }, // do
+    .{ .number = 51, .child_index = 354, .children_len = 2, .end_of_word = false }, // dr
+    .{ .number = 54, .child_index = 356, .children_len = 3, .end_of_word = false }, // ds
+    .{ .number = 58, .child_index = 359, .children_len = 2, .end_of_word = false }, // dt
+    .{ .number = 61, .child_index = 361, .children_len = 2, .end_of_word = false }, // du
+    .{ .number = 63, .child_index = 363, .children_len = 1, .end_of_word = false }, // dw
+    .{ .number = 64, .child_index = 364, .children_len = 2, .end_of_word = false }, // dz
+    .{ .number = 0, .child_index = 366, .children_len = 2, .end_of_word = false }, // eD
+    .{ .number = 2, .child_index = 368, .children_len = 2, .end_of_word = false }, // ea
+    .{ .number = 5, .child_index = 370, .children_len = 4, .end_of_word = false }, // ec
+    .{ .number = 11, .child_index = 39, .children_len = 1, .end_of_word = false }, // ed
+    .{ .number = 12, .child_index = 91, .children_len = 1, .end_of_word = false }, // ee
+    .{ .number = 13, .child_index = 374, .children_len = 2, .end_of_word = false }, // ef
+    .{ .number = 15, .child_index = 376, .children_len = 3, .end_of_word = false }, // eg
+    .{ .number = 20, .child_index = 379, .children_len = 4, .end_of_word = false }, // el
+    .{ .number = 25, .child_index = 383, .children_len = 3, .end_of_word = false }, // em
+    .{ .number = 32, .child_index = 386, .children_len = 2, .end_of_word = false }, // en
+    .{ .number = 34, .child_index = 12, .children_len = 2, .end_of_word = false }, // eo
+    .{ .number = 36, .child_index = 388, .children_len = 3, .end_of_word = false }, // ep
+    .{ .number = 42, .child_index = 391, .children_len = 4, .end_of_word = false }, // eq
+    .{ .number = 52, .child_index = 395, .children_len = 2, .end_of_word = false }, // er
+    .{ .number = 54, .child_index = 397, .children_len = 3, .end_of_word = false }, // es
+    .{ .number = 57, .child_index = 400, .children_len = 2, .end_of_word = false }, // et
+    .{ .number = 60, .child_index = 402, .children_len = 2, .end_of_word = false }, // eu
+    .{ .number = 63, .child_index = 404, .children_len = 3, .end_of_word = false }, // ex
+    .{ .number = 0, .child_index = 407, .children_len = 1, .end_of_word = false }, // fa
+    .{ .number = 1, .child_index = 22, .children_len = 1, .end_of_word = false }, // fc
+    .{ .number = 2, .child_index = 408, .children_len = 1, .end_of_word = false }, // fe
+    .{ .number = 3, .child_index = 409, .children_len = 3, .end_of_word = false }, // ff
+    .{ .number = 7, .child_index = 101, .children_len = 1, .end_of_word = false }, // fi
+    .{ .number = 8, .child_index = 101, .children_len = 1, .end_of_word = false }, // fj
+    .{ .number = 9, .child_index = 412, .children_len = 3, .end_of_word = false }, // fl
+    .{ .number = 12, .child_index = 415, .children_len = 1, .end_of_word = false }, // fn
+    .{ .number = 13, .child_index = 416, .children_len = 2, .end_of_word = false }, // fo
+    .{ .number = 17, .child_index = 418, .children_len = 1, .end_of_word = false }, // fp
+    .{ .number = 18, .child_index = 419, .children_len = 2, .end_of_word = false }, // fr
+    .{ .number = 38, .child_index = 28, .children_len = 1, .end_of_word = false }, // fs
+    .{ .number = 0, .child_index = 421, .children_len = 2, .end_of_word = false }, // gE
+    .{ .number = 2, .child_index = 423, .children_len = 3, .end_of_word = false }, // ga
+    .{ .number = 6, .child_index = 4, .children_len = 1, .end_of_word = false }, // gb
+    .{ .number = 7, .child_index = 113, .children_len = 2, .end_of_word = false }, // gc
+    .{ .number = 9, .child_index = 39, .children_len = 1, .end_of_word = false }, // gd
+    .{ .number = 10, .child_index = 426, .children_len = 4, .end_of_word = false }, // ge
+    .{ .number = 22, .child_index = 7, .children_len = 1, .end_of_word = false }, // gf
+    .{ .number = 23, .child_index = 430, .children_len = 2, .end_of_word = false }, // gg
+    .{ .number = 25, .child_index = 432, .children_len = 1, .end_of_word = false }, // gi
+    .{ .number = 26, .child_index = 30, .children_len = 1, .end_of_word = false }, // gj
+    .{ .number = 27, .child_index = 433, .children_len = 4, .end_of_word = false }, // gl
+    .{ .number = 31, .child_index = 437, .children_len = 4, .end_of_word = false }, // gn
+    .{ .number = 38, .child_index = 26, .children_len = 1, .end_of_word = false }, // go
+    .{ .number = 39, .child_index = 441, .children_len = 1, .end_of_word = false }, // gr
+    .{ .number = 40, .child_index = 442, .children_len = 2, .end_of_word = false }, // gs
+    .{ .number = 44, .child_index = 444, .children_len = 6, .end_of_word = true }, // gt
+    .{ .number = 58, .child_index = 450, .children_len = 2, .end_of_word = false }, // gv
+    .{ .number = 0, .child_index = 327, .children_len = 1, .end_of_word = false }, // hA
+    .{ .number = 1, .child_index = 452, .children_len = 4, .end_of_word = false }, // ha
+    .{ .number = 8, .child_index = 200, .children_len = 1, .end_of_word = false }, // hb
+    .{ .number = 9, .child_index = 96, .children_len = 1, .end_of_word = false }, // hc
+    .{ .number = 10, .child_index = 456, .children_len = 3, .end_of_word = false }, // he
+    .{ .number = 14, .child_index = 7, .children_len = 1, .end_of_word = false }, // hf
+    .{ .number = 15, .child_index = 459, .children_len = 1, .end_of_word = false }, // hk
+    .{ .number = 17, .child_index = 460, .children_len = 5, .end_of_word = false }, // ho
+    .{ .number = 23, .child_index = 465, .children_len = 3, .end_of_word = false }, // hs
+    .{ .number = 26, .child_index = 468, .children_len = 2, .end_of_word = false }, // hy
+    .{ .number = 0, .child_index = 3, .children_len = 1, .end_of_word = false }, // ia
+    .{ .number = 2, .child_index = 470, .children_len = 3, .end_of_word = false }, // ic
+    .{ .number = 6, .child_index = 473, .children_len = 2, .end_of_word = false }, // ie
+    .{ .number = 9, .child_index = 475, .children_len = 2, .end_of_word = false }, // if
+    .{ .number = 11, .child_index = 8, .children_len = 1, .end_of_word = false }, // ig
+    .{ .number = 13, .child_index = 477, .children_len = 4, .end_of_word = false }, // ii
+    .{ .number = 18, .child_index = 101, .children_len = 1, .end_of_word = false }, // ij
+    .{ .number = 19, .child_index = 481, .children_len = 3, .end_of_word = false }, // im
+    .{ .number = 26, .child_index = 484, .children_len = 5, .end_of_word = false }, // in
+    .{ .number = 37, .child_index = 489, .children_len = 4, .end_of_word = false }, // io
+    .{ .number = 41, .child_index = 493, .children_len = 1, .end_of_word = false }, // ip
+    .{ .number = 42, .child_index = 494, .children_len = 1, .end_of_word = false }, // iq
+    .{ .number = 44, .child_index = 495, .children_len = 2, .end_of_word = false }, // is
+    .{ .number = 51, .child_index = 497, .children_len = 2, .end_of_word = false }, // it
+    .{ .number = 53, .child_index = 111, .children_len = 2, .end_of_word = false }, // iu
+    .{ .number = 0, .child_index = 113, .children_len = 2, .end_of_word = false }, // jc
+    .{ .number = 2, .child_index = 7, .children_len = 1, .end_of_word = false }, // jf
+    .{ .number = 3, .child_index = 499, .children_len = 1, .end_of_word = false }, // jm
+    .{ .number = 4, .child_index = 26, .children_len = 1, .end_of_word = false }, // jo
+    .{ .number = 5, .child_index = 115, .children_len = 2, .end_of_word = false }, // js
+    .{ .number = 7, .child_index = 117, .children_len = 1, .end_of_word = false }, // ju
+    .{ .number = 0, .child_index = 500, .children_len = 1, .end_of_word = false }, // ka
+    .{ .number = 2, .child_index = 119, .children_len = 2, .end_of_word = false }, // kc
+    .{ .number = 4, .child_index = 7, .children_len = 1, .end_of_word = false }, // kf
+    .{ .number = 5, .child_index = 501, .children_len = 1, .end_of_word = false }, // kg
+    .{ .number = 6, .child_index = 30, .children_len = 1, .end_of_word = false }, // kh
+    .{ .number = 7, .child_index = 30, .children_len = 1, .end_of_word = false }, // kj
+    .{ .number = 8, .child_index = 26, .children_len = 1, .end_of_word = false }, // ko
+    .{ .number = 9, .child_index = 28, .children_len = 1, .end_of_word = false }, // ks
+    .{ .number = 0, .child_index = 502, .children_len = 3, .end_of_word = false }, // lA
+    .{ .number = 3, .child_index = 172, .children_len = 1, .end_of_word = false }, // lB
+    .{ .number = 4, .child_index = 430, .children_len = 2, .end_of_word = false }, // lE
+    .{ .number = 6, .child_index = 200, .children_len = 1, .end_of_word = false }, // lH
+    .{ .number = 7, .child_index = 505, .children_len = 9, .end_of_word = false }, // la
+    .{ .number = 30, .child_index = 514, .children_len = 3, .end_of_word = false }, // lb
+    .{ .number = 37, .child_index = 517, .children_len = 4, .end_of_word = false }, // lc
+    .{ .number = 42, .child_index = 521, .children_len = 4, .end_of_word = false }, // ld
+    .{ .number = 48, .child_index = 525, .children_len = 5, .end_of_word = false }, // le
+    .{ .number = 76, .child_index = 530, .children_len = 3, .end_of_word = false }, // lf
+    .{ .number = 79, .child_index = 533, .children_len = 2, .end_of_word = false }, // lg
+    .{ .number = 81, .child_index = 535, .children_len = 2, .end_of_word = false }, // lh
+    .{ .number = 85, .child_index = 30, .children_len = 1, .end_of_word = false }, // lj
+    .{ .number = 86, .child_index = 537, .children_len = 5, .end_of_word = false }, // ll
+    .{ .number = 91, .child_index = 542, .children_len = 2, .end_of_word = false }, // lm
+    .{ .number = 94, .child_index = 437, .children_len = 4, .end_of_word = false }, // ln
+    .{ .number = 101, .child_index = 544, .children_len = 8, .end_of_word = false }, // lo
+    .{ .number = 119, .child_index = 552, .children_len = 1, .end_of_word = false }, // lp
+    .{ .number = 121, .child_index = 553, .children_len = 5, .end_of_word = false }, // lr
+    .{ .number = 127, .child_index = 558, .children_len = 6, .end_of_word = false }, // ls
+    .{ .number = 137, .child_index = 564, .children_len = 8, .end_of_word = true }, // lt
+    .{ .number = 150, .child_index = 572, .children_len = 1, .end_of_word = false }, // lu
+    .{ .number = 152, .child_index = 450, .children_len = 2, .end_of_word = false }, // lv
+    .{ .number = 0, .child_index = 573, .children_len = 1, .end_of_word = false }, // mD
+    .{ .number = 1, .child_index = 574, .children_len = 4, .end_of_word = false }, // ma
+    .{ .number = 12, .child_index = 578, .children_len = 2, .end_of_word = false }, // mc
+    .{ .number = 14, .child_index = 229, .children_len = 1, .end_of_word = false }, // md
+    .{ .number = 15, .child_index = 580, .children_len = 1, .end_of_word = false }, // me
+    .{ .number = 16, .child_index = 7, .children_len = 1, .end_of_word = false }, // mf
+    .{ .number = 17, .child_index = 179, .children_len = 1, .end_of_word = false }, // mh
+    .{ .number = 18, .child_index = 581, .children_len = 3, .end_of_word = false }, // mi
+    .{ .number = 29, .child_index = 584, .children_len = 2, .end_of_word = false }, // ml
+    .{ .number = 31, .child_index = 586, .children_len = 1, .end_of_word = false }, // mn
+    .{ .number = 32, .child_index = 587, .children_len = 2, .end_of_word = false }, // mo
+    .{ .number = 34, .child_index = 91, .children_len = 1, .end_of_word = false }, // mp
+    .{ .number = 35, .child_index = 589, .children_len = 2, .end_of_word = false }, // ms
+    .{ .number = 37, .child_index = 591, .children_len = 3, .end_of_word = false }, // mu
+    .{ .number = 0, .child_index = 594, .children_len = 2, .end_of_word = false }, // nG
+    .{ .number = 3, .child_index = 596, .children_len = 3, .end_of_word = false }, // nL
+    .{ .number = 8, .child_index = 183, .children_len = 1, .end_of_word = false }, // nR
+    .{ .number = 9, .child_index = 599, .children_len = 2, .end_of_word = false }, // nV
+    .{ .number = 11, .child_index = 601, .children_len = 5, .end_of_word = false }, // na
+    .{ .number = 22, .child_index = 606, .children_len = 2, .end_of_word = false }, // nb
+    .{ .number = 26, .child_index = 608, .children_len = 5, .end_of_word = false }, // nc
+    .{ .number = 33, .child_index = 229, .children_len = 1, .end_of_word = false }, // nd
+    .{ .number = 34, .child_index = 613, .children_len = 7, .end_of_word = false }, // ne
+    .{ .number = 45, .child_index = 7, .children_len = 1, .end_of_word = false }, // nf
+    .{ .number = 46, .child_index = 620, .children_len = 4, .end_of_word = false }, // ng
+    .{ .number = 55, .child_index = 624, .children_len = 3, .end_of_word = false }, // nh
+    .{ .number = 58, .child_index = 627, .children_len = 3, .end_of_word = false }, // ni
+    .{ .number = 62, .child_index = 30, .children_len = 1, .end_of_word = false }, // nj
+    .{ .number = 63, .child_index = 630, .children_len = 7, .end_of_word = false }, // nl
+    .{ .number = 79, .child_index = 637, .children_len = 1, .end_of_word = false }, // nm
+    .{ .number = 80, .child_index = 638, .children_len = 2, .end_of_word = false }, // no
+    .{ .number = 93, .child_index = 640, .children_len = 3, .end_of_word = false }, // np
+    .{ .number = 103, .child_index = 643, .children_len = 4, .end_of_word = false }, // nr
+    .{ .number = 110, .child_index = 647, .children_len = 7, .end_of_word = false }, // ns
+    .{ .number = 137, .child_index = 654, .children_len = 4, .end_of_word = false }, // nt
+    .{ .number = 145, .child_index = 658, .children_len = 2, .end_of_word = false }, // nu
+    .{ .number = 149, .child_index = 660, .children_len = 9, .end_of_word = false }, // nv
+    .{ .number = 163, .child_index = 669, .children_len = 3, .end_of_word = false }, // nw
+    .{ .number = 0, .child_index = 91, .children_len = 1, .end_of_word = false }, // oS
+    .{ .number = 1, .child_index = 672, .children_len = 2, .end_of_word = false }, // oa
+    .{ .number = 4, .child_index = 674, .children_len = 2, .end_of_word = false }, // oc
+    .{ .number = 8, .child_index = 676, .children_len = 5, .end_of_word = false }, // od
+    .{ .number = 13, .child_index = 101, .children_len = 1, .end_of_word = false }, // oe
+    .{ .number = 14, .child_index = 681, .children_len = 2, .end_of_word = false }, // of
+    .{ .number = 16, .child_index = 683, .children_len = 3, .end_of_word = false }, // og
+    .{ .number = 20, .child_index = 686, .children_len = 2, .end_of_word = false }, // oh
+    .{ .number = 22, .child_index = 688, .children_len = 1, .end_of_word = false }, // oi
+    .{ .number = 23, .child_index = 689, .children_len = 4, .end_of_word = false }, // ol
+    .{ .number = 28, .child_index = 693, .children_len = 3, .end_of_word = false }, // om
+    .{ .number = 33, .child_index = 26, .children_len = 1, .end_of_word = false }, // oo
+    .{ .number = 34, .child_index = 696, .children_len = 3, .end_of_word = false }, // op
+    .{ .number = 37, .child_index = 699, .children_len = 7, .end_of_word = false }, // or
+    .{ .number = 50, .child_index = 706, .children_len = 3, .end_of_word = false }, // os
+    .{ .number = 54, .child_index = 709, .children_len = 1, .end_of_word = false }, // ot
+    .{ .number = 58, .child_index = 19, .children_len = 1, .end_of_word = false }, // ou
+    .{ .number = 60, .child_index = 710, .children_len = 1, .end_of_word = false }, // ov
+    .{ .number = 0, .child_index = 711, .children_len = 1, .end_of_word = false }, // pa
+    .{ .number = 7, .child_index = 22, .children_len = 1, .end_of_word = false }, // pc
+    .{ .number = 8, .child_index = 712, .children_len = 1, .end_of_word = false }, // pe
+    .{ .number = 13, .child_index = 7, .children_len = 1, .end_of_word = false }, // pf
+    .{ .number = 14, .child_index = 713, .children_len = 3, .end_of_word = false }, // ph
+    .{ .number = 18, .child_index = 716, .children_len = 3, .end_of_word = false }, // pi
+    .{ .number = 21, .child_index = 719, .children_len = 2, .end_of_word = false }, // pl
+    .{ .number = 35, .child_index = 91, .children_len = 1, .end_of_word = false }, // pm
+    .{ .number = 36, .child_index = 721, .children_len = 3, .end_of_word = false }, // po
+    .{ .number = 40, .child_index = 724, .children_len = 10, .end_of_word = false }, // pr
+    .{ .number = 66, .child_index = 169, .children_len = 2, .end_of_word = false }, // ps
+    .{ .number = 68, .child_index = 734, .children_len = 1, .end_of_word = false }, // pu
+    .{ .number = 0, .child_index = 7, .children_len = 1, .end_of_word = false }, // qf
+    .{ .number = 1, .child_index = 688, .children_len = 1, .end_of_word = false }, // qi
+    .{ .number = 2, .child_index = 26, .children_len = 1, .end_of_word = false }, // qo
+    .{ .number = 3, .child_index = 286, .children_len = 1, .end_of_word = false }, // qp
+    .{ .number = 4, .child_index = 28, .children_len = 1, .end_of_word = false }, // qs
+    .{ .number = 5, .child_index = 735, .children_len = 3, .end_of_word = false }, // qu
+    .{ .number = 0, .child_index = 502, .children_len = 3, .end_of_word = false }, // rA
+    .{ .number = 3, .child_index = 172, .children_len = 1, .end_of_word = false }, // rB
+    .{ .number = 4, .child_index = 200, .children_len = 1, .end_of_word = false }, // rH
+    .{ .number = 5, .child_index = 738, .children_len = 7, .end_of_word = false }, // ra
+    .{ .number = 30, .child_index = 514, .children_len = 3, .end_of_word = false }, // rb
+    .{ .number = 37, .child_index = 517, .children_len = 4, .end_of_word = false }, // rc
+    .{ .number = 42, .child_index = 745, .children_len = 4, .end_of_word = false }, // rd
+    .{ .number = 47, .child_index = 749, .children_len = 3, .end_of_word = false }, // re
+    .{ .number = 54, .child_index = 530, .children_len = 3, .end_of_word = false }, // rf
+    .{ .number = 57, .child_index = 752, .children_len = 2, .end_of_word = false }, // rh
+    .{ .number = 62, .child_index = 754, .children_len = 3, .end_of_word = false }, // ri
+    .{ .number = 73, .child_index = 757, .children_len = 3, .end_of_word = false }, // rl
+    .{ .number = 76, .child_index = 760, .children_len = 1, .end_of_word = false }, // rm
+    .{ .number = 78, .child_index = 761, .children_len = 1, .end_of_word = false }, // rn
+    .{ .number = 79, .child_index = 762, .children_len = 4, .end_of_word = false }, // ro
+    .{ .number = 86, .child_index = 766, .children_len = 2, .end_of_word = false }, // rp
+    .{ .number = 89, .child_index = 172, .children_len = 1, .end_of_word = false }, // rr
+    .{ .number = 90, .child_index = 768, .children_len = 4, .end_of_word = false }, // rs
+    .{ .number = 96, .child_index = 772, .children_len = 3, .end_of_word = false }, // rt
+    .{ .number = 102, .child_index = 775, .children_len = 1, .end_of_word = false }, // ru
+    .{ .number = 103, .child_index = 91, .children_len = 1, .end_of_word = false }, // rx
+    .{ .number = 0, .child_index = 144, .children_len = 1, .end_of_word = false }, // sa
+    .{ .number = 1, .child_index = 269, .children_len = 1, .end_of_word = false }, // sb
+    .{ .number = 2, .child_index = 776, .children_len = 10, .end_of_word = false }, // sc
+    .{ .number = 16, .child_index = 786, .children_len = 1, .end_of_word = false }, // sd
+    .{ .number = 19, .child_index = 787, .children_len = 7, .end_of_word = false }, // se
+    .{ .number = 30, .child_index = 794, .children_len = 1, .end_of_word = false }, // sf
+    .{ .number = 32, .child_index = 795, .children_len = 4, .end_of_word = false }, // sh
+    .{ .number = 39, .child_index = 799, .children_len = 2, .end_of_word = false }, // si
+    .{ .number = 53, .child_index = 172, .children_len = 1, .end_of_word = false }, // sl
+    .{ .number = 54, .child_index = 801, .children_len = 4, .end_of_word = false }, // sm
+    .{ .number = 62, .child_index = 805, .children_len = 3, .end_of_word = false }, // so
+    .{ .number = 67, .child_index = 808, .children_len = 1, .end_of_word = false }, // sp
+    .{ .number = 70, .child_index = 809, .children_len = 3, .end_of_word = false }, // sq
+    .{ .number = 86, .child_index = 172, .children_len = 1, .end_of_word = false }, // sr
+    .{ .number = 87, .child_index = 812, .children_len = 4, .end_of_word = false }, // ss
+    .{ .number = 91, .child_index = 816, .children_len = 2, .end_of_word = false }, // st
+    .{ .number = 96, .child_index = 818, .children_len = 5, .end_of_word = false }, // su
+    .{ .number = 151, .child_index = 823, .children_len = 3, .end_of_word = false }, // sw
+    .{ .number = 156, .child_index = 1, .children_len = 1, .end_of_word = false }, // sz
+    .{ .number = 0, .child_index = 826, .children_len = 2, .end_of_word = false }, // ta
+    .{ .number = 2, .child_index = 828, .children_len = 1, .end_of_word = false }, // tb
+    .{ .number = 3, .child_index = 126, .children_len = 3, .end_of_word = false }, // tc
+    .{ .number = 6, .child_index = 39, .children_len = 1, .end_of_word = false }, // td
+    .{ .number = 7, .child_index = 829, .children_len = 1, .end_of_word = false }, // te
+    .{ .number = 8, .child_index = 7, .children_len = 1, .end_of_word = false }, // tf
+    .{ .number = 9, .child_index = 830, .children_len = 4, .end_of_word = false }, // th
+    .{ .number = 21, .child_index = 834, .children_len = 3, .end_of_word = false }, // ti
+    .{ .number = 28, .child_index = 837, .children_len = 3, .end_of_word = false }, // to
+    .{ .number = 35, .child_index = 286, .children_len = 1, .end_of_word = false }, // tp
+    .{ .number = 36, .child_index = 840, .children_len = 3, .end_of_word = false }, // tr
+    .{ .number = 51, .child_index = 843, .children_len = 3, .end_of_word = false }, // ts
+    .{ .number = 55, .child_index = 846, .children_len = 2, .end_of_word = false }, // tw
+    .{ .number = 0, .child_index = 327, .children_len = 1, .end_of_word = false }, // uA
+    .{ .number = 1, .child_index = 200, .children_len = 1, .end_of_word = false }, // uH
+    .{ .number = 2, .child_index = 848, .children_len = 2, .end_of_word = false }, // ua
+    .{ .number = 5, .child_index = 217, .children_len = 1, .end_of_word = false }, // ub
+    .{ .number = 7, .child_index = 5, .children_len = 2, .end_of_word = false }, // uc
+    .{ .number = 10, .child_index = 850, .children_len = 3, .end_of_word = false }, // ud
+    .{ .number = 13, .child_index = 340, .children_len = 2, .end_of_word = false }, // uf
+    .{ .number = 15, .child_index = 8, .children_len = 1, .end_of_word = false }, // ug
+    .{ .number = 17, .child_index = 853, .children_len = 2, .end_of_word = false }, // uh
+    .{ .number = 20, .child_index = 855, .children_len = 2, .end_of_word = false }, // ul
+    .{ .number = 24, .child_index = 857, .children_len = 2, .end_of_word = false }, // um
+    .{ .number = 27, .child_index = 12, .children_len = 2, .end_of_word = false }, // uo
+    .{ .number = 29, .child_index = 859, .children_len = 6, .end_of_word = false }, // up
+    .{ .number = 38, .child_index = 865, .children_len = 3, .end_of_word = false }, // ur
+    .{ .number = 43, .child_index = 28, .children_len = 1, .end_of_word = false }, // us
+    .{ .number = 44, .child_index = 868, .children_len = 3, .end_of_word = false }, // ut
+    .{ .number = 48, .child_index = 871, .children_len = 2, .end_of_word = false }, // uu
+    .{ .number = 51, .child_index = 363, .children_len = 1, .end_of_word = false }, // uw
+    .{ .number = 0, .child_index = 327, .children_len = 1, .end_of_word = false }, // vA
+    .{ .number = 1, .child_index = 873, .children_len = 1, .end_of_word = false }, // vB
+    .{ .number = 3, .child_index = 229, .children_len = 1, .end_of_word = false }, // vD
+    .{ .number = 4, .child_index = 874, .children_len = 2, .end_of_word = false }, // va
+    .{ .number = 21, .child_index = 22, .children_len = 1, .end_of_word = false }, // vc
+    .{ .number = 22, .child_index = 229, .children_len = 1, .end_of_word = false }, // vd
+    .{ .number = 23, .child_index = 876, .children_len = 3, .end_of_word = false }, // ve
+    .{ .number = 29, .child_index = 7, .children_len = 1, .end_of_word = false }, // vf
+    .{ .number = 30, .child_index = 879, .children_len = 1, .end_of_word = false }, // vl
+    .{ .number = 31, .child_index = 880, .children_len = 1, .end_of_word = false }, // vn
+    .{ .number = 33, .child_index = 26, .children_len = 1, .end_of_word = false }, // vo
+    .{ .number = 34, .child_index = 881, .children_len = 1, .end_of_word = false }, // vp
+    .{ .number = 35, .child_index = 879, .children_len = 1, .end_of_word = false }, // vr
+    .{ .number = 36, .child_index = 882, .children_len = 2, .end_of_word = false }, // vs
+    .{ .number = 41, .child_index = 884, .children_len = 1, .end_of_word = false }, // vz
+    .{ .number = 0, .child_index = 96, .children_len = 1, .end_of_word = false }, // wc
+    .{ .number = 1, .child_index = 885, .children_len = 2, .end_of_word = false }, // we
+    .{ .number = 5, .child_index = 7, .children_len = 1, .end_of_word = false }, // wf
+    .{ .number = 6, .child_index = 26, .children_len = 1, .end_of_word = false }, // wo
+    .{ .number = 7, .child_index = 91, .children_len = 1, .end_of_word = false }, // wp
+    .{ .number = 8, .child_index = 887, .children_len = 2, .end_of_word = false }, // wr
+    .{ .number = 10, .child_index = 28, .children_len = 1, .end_of_word = false }, // ws
+    .{ .number = 0, .child_index = 889, .children_len = 3, .end_of_word = false }, // xc
+    .{ .number = 3, .child_index = 879, .children_len = 1, .end_of_word = false }, // xd
+    .{ .number = 4, .child_index = 7, .children_len = 1, .end_of_word = false }, // xf
+    .{ .number = 5, .child_index = 892, .children_len = 2, .end_of_word = false }, // xh
+    .{ .number = 7, .child_index = 91, .children_len = 1, .end_of_word = false }, // xi
+    .{ .number = 8, .child_index = 892, .children_len = 2, .end_of_word = false }, // xl
+    .{ .number = 10, .child_index = 894, .children_len = 1, .end_of_word = false }, // xm
+    .{ .number = 11, .child_index = 895, .children_len = 1, .end_of_word = false }, // xn
+    .{ .number = 12, .child_index = 896, .children_len = 3, .end_of_word = false }, // xo
+    .{ .number = 16, .child_index = 892, .children_len = 2, .end_of_word = false }, // xr
+    .{ .number = 18, .child_index = 899, .children_len = 2, .end_of_word = false }, // xs
+    .{ .number = 20, .child_index = 901, .children_len = 2, .end_of_word = false }, // xu
+    .{ .number = 22, .child_index = 903, .children_len = 1, .end_of_word = false }, // xv
+    .{ .number = 23, .child_index = 904, .children_len = 1, .end_of_word = false }, // xw
+    .{ .number = 0, .child_index = 905, .children_len = 1, .end_of_word = false }, // ya
+    .{ .number = 3, .child_index = 113, .children_len = 2, .end_of_word = false }, // yc
+    .{ .number = 5, .child_index = 906, .children_len = 1, .end_of_word = false }, // ye
+    .{ .number = 7, .child_index = 7, .children_len = 1, .end_of_word = false }, // yf
+    .{ .number = 8, .child_index = 30, .children_len = 1, .end_of_word = false }, // yi
+    .{ .number = 9, .child_index = 26, .children_len = 1, .end_of_word = false }, // yo
+    .{ .number = 10, .child_index = 28, .children_len = 1, .end_of_word = false }, // ys
+    .{ .number = 11, .child_index = 907, .children_len = 2, .end_of_word = false }, // yu
+    .{ .number = 0, .child_index = 144, .children_len = 1, .end_of_word = false }, // za
+    .{ .number = 1, .child_index = 56, .children_len = 2, .end_of_word = false }, // zc
+    .{ .number = 3, .child_index = 39, .children_len = 1, .end_of_word = false }, // zd
+    .{ .number = 4, .child_index = 909, .children_len = 2, .end_of_word = false }, // ze
+    .{ .number = 6, .child_index = 7, .children_len = 1, .end_of_word = false }, // zf
+    .{ .number = 7, .child_index = 30, .children_len = 1, .end_of_word = false }, // zh
+    .{ .number = 8, .child_index = 911, .children_len = 1, .end_of_word = false }, // zi
+    .{ .number = 9, .child_index = 26, .children_len = 1, .end_of_word = false }, // zo
+    .{ .number = 10, .child_index = 28, .children_len = 1, .end_of_word = false }, // zs
+    .{ .number = 11, .child_index = 912, .children_len = 2, .end_of_word = false }, // zw
 };
 
 pub const dafsa = [_]Node{

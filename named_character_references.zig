@@ -1,55 +1,7 @@
 //! `Matcher` is a struct that exposes an API tailored to the named character reference state of
 //! HMTL tokenization. Underpinning it is a DAFSA that has been modified to improve performance
 //! while keeping the data size low, and taking advantage of the fact that the named character
-//! references table will not change at any point in the future. The following modifications to
-//! the typical DAFSA (plus the minimal perfect hashing technique described in [1]) have been made:
-//!
-//! - The 'first layer' of nodes in the DAFSA have been extracted out and replaced with a lookup
-//!   table. This allows for an O(1) search for the first character instead of an O(n) search.
-//!   To continue to allow minimal perfect hashing, the `number` field in the lookup table entries
-//!   contain the total of what the normal number field would be of all of the sibling nodes before
-//!   it. That is, if we have `a`, `b`, and `c` (in that order) where the count of all possible
-//!   valid words from each node is 3, 2, and 1 (respectively), then in the lookup table the element
-//!   corresponding to `a` would have the `number` 0, `b` would get the number 3, and `c` would
-//!   get the number 5 (since the nodes before it have the numbers 3 and 2, so 3 + 2 = 5). This
-//!   allows the O(1) lookup to emulate the "linear scan over children while incrementally adding
-//!   up `number` fields" approach to minimal perfect hashing using a DAFSA without the need for the
-//!   linear scan. In other words, the linear scan is emulated at construction time and the result
-//!   is stored in the lookup entry corresponding to the node that would get that result.
-//! - A lookup table of bit masks is stored as a way to go from the 'first layer' of nodes to the
-//!   'second layer' of nodes. This allows the use of a lookup table for the second layer of nodes
-//!   while keeping the 'second layer' lookup table small, because:
-//!     - The second layer can only contain a-z and A-Z (inclusive)
-//!     - The validity of any given character can be determined by a bitwise AND
-//!     - The index into the second layer can be determined with `@popCount`, which allows for
-//!       storing the minimum number of elements in the second layer lookup tables since gaps
-//!       between set bits are disregarded by `@popCount`. For example, if a mask looks like
-//!       0b1010, then we can store a lookup table with 2 elements and our `@popCount` incantation
-//!       will return either a 0 or a 1 for the index to use for the set bits.
-//! - The 'second layer' of nodes in the DAFSA have been extracted out, similar to the 'first
-//!   layer' (but note that the second layer lookup table stores more information).
-//! - The second layer lookup table is a contiguous array, and the starting offset corresponding to
-//!   each first character is stored in the 'first to second layer' lookup table along with the
-//!   bit mask to use. The index corresponding to the second character as described above (the
-//!   `@popCount` stuff) is added to the offset to get the final index of the second layer node.
-//! - After the second layer, the rest of the data is stored using a mostly-normal DAFSA, but there
-//!   are still a few differences:
-//!     - The `number` field is cumulative, in the same way that the first/second layer store a
-//!       cumulative `number` field. This cuts down slightly on the amount of work done during
-//!       the search of a list of children, and we can get away with it because the cumulative
-//!       `number` fields of the remaining nodes in the DAFSA (after the first and second layer
-//!       nodes were extracted out) happens to require few enough bits that we can store the
-//!       cumulative version while staying under our 32-bit budget.
-//!     - Instead of storing a 'last sibling' flag to denote the end of a list of children, the
-//!       length of each node's list of children is stored. Again, this is mostly done just because
-//!       there are enough bits available to do so while keeping the DAFSA node within 32 bits.
-//!     - Note: Storing the length of each list of children opens up the possibility of using a
-//!       binary search instead of a linear search over the children, but due to the consistently
-//!       small lengths of the lists of children in the remaining DAFSA, a linear search actually
-//!       seems to be the better option.
-//!
-//! [1]: Applications of finite automata representing large vocabularies (Cláudio L. Lucchesi,
-//!      Tomasz Kowaltowski, 1993) https://doi.org/10.1002/spe.4380230103
+//! references table will not change at any point in the future.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -103,6 +55,25 @@ pub const Matcher = struct {
                 const bit_index = asciiAlphabeticToIndex(c);
                 if (@as(u52, 1) << bit_index & link.mask == 0) return false;
 
+                // Get the second layer node by re-using the link.mask.
+                // For example, if the first character is 'n' and the second character is 'o':
+                //
+                // This is the link.mask when the first character is 'n':
+                // 0001111110110110111111111100001000100000100001000000
+                //            └ bit_index of 'o'
+                //
+                // Create a mask where all of the less significant bits than the bit index of
+                // the current character ('o') are set:
+                // 0000000000001111111111111111111111111111111111111111
+                //            └ bit_index of 'o'
+                //
+                // Bitwise AND this new mask with the link.mask to get only the set bits less
+                // significant than the bit index of the current character:
+                // 0000000000000110111111111100001000100000100001000000
+                //
+                // Take the popcount of this to get the index of the node within the
+                // second layer. In this case, there are 16 bits set, so the index
+                // of 'o' in the second layer is link.second_layer_offset + 16.
                 const mask = (@as(u52, 1) << bit_index) - 1;
                 const char_index = @popCount(link.mask & mask);
                 const node = second_layer.get(link.second_layer_offset + char_index);

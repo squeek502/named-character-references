@@ -373,16 +373,13 @@ pub fn main() !void {
 
         try writer.writeAll("pub const first_layer = [_]FirstLayerNode {\n");
         var unique_index_tally: u12 = 0;
-        var first_child_index: u10 = 1;
         for (0..128) |c_usize| {
             const c: u8 = @intCast(c_usize);
             const child = builder.root.children[c] orelse continue;
             std.debug.assert(std.ascii.isAlphabetic(c));
 
-            const child_num_children = child.numDirectChildren();
             try writer.print("    .{{ .number = {} }},\n", .{unique_index_tally});
             unique_index_tally += child.number;
-            first_child_index += child_num_children;
         }
         try writer.writeAll("};\n\n");
 

@@ -25,40 +25,46 @@ pub const Matcher = struct {
         dafsa: []const Node,
     };
 
+    pub const ConsumeResult = enum {
+        consume_and_end,
+        consume_and_continue,
+        dont_consume_and_end,
+    };
+
     /// If `c` is the codepoint of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn tryConsumeCodePoint(self: *Matcher, c: u21) bool {
-        if (c > std.math.maxInt(u7)) return false;
+    pub fn tryConsumeCodePoint(self: *Matcher, c: u21) ConsumeResult {
+        if (c > std.math.maxInt(u7)) return .dont_consume_and_end;
         return self.tryConsumeAsciiChar(@intCast(c));
     }
 
     /// If `c` is the character of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn tryConsumeByte(self: *Matcher, c: u8) bool {
-        if (c > std.math.maxInt(u7)) return false;
+    pub fn tryConsumeByte(self: *Matcher, c: u8) ConsumeResult {
+        if (c > std.math.maxInt(u7)) return .dont_consume_and_end;
         return self.tryConsumeAsciiChar(@intCast(c));
     }
 
     /// If `c` is the character of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn tryConsumeAsciiChar(self: *Matcher, c: u7) bool {
+    pub fn tryConsumeAsciiChar(self: *Matcher, c: u7) ConsumeResult {
         switch (self.search_state) {
             .init => {
-                if (!std.ascii.isAlphabetic(c)) return false;
+                if (!std.ascii.isAlphabetic(c)) return .dont_consume_and_end;
                 const index = asciiAlphabeticToIndex(c);
                 const node = first_layer[index];
                 self.search_state = .{ .first_to_second_layer = first_to_second_layer[index] };
                 self.pending_unique_index = @intCast(node.number);
                 self.overconsumed_code_points += 1;
-                return true;
+                return .consume_and_continue;
             },
             .first_to_second_layer => |link| {
-                if (!std.ascii.isAlphabetic(c)) return false;
+                if (!std.ascii.isAlphabetic(c)) return .dont_consume_and_end;
                 const bit_index = asciiAlphabeticToIndex(c);
-                if (@as(u52, 1) << bit_index & link.mask == 0) return false;
+                if (@as(u52, 1) << bit_index & link.mask == 0) return .dont_consume_and_end;
 
                 // Get the second layer node by re-using the link.mask.
                 // For example, if the first character is 'n' and the second character is 'o':
@@ -87,11 +93,13 @@ pub const Matcher = struct {
                 if (node.end_of_word) {
                     self.pending_unique_index += 1;
                     self.last_matched_unique_index = self.pending_unique_index;
-                    self.ends_with_semicolon = c == ';';
                     self.overconsumed_code_points = 0;
+                    // Note: Two-letter named character references are limited to
+                    // exactly &gt/&GT/&lt/&LT, so there's no possiblity of a
+                    // semicolon in any two-letter named character references.
                 }
                 self.search_state = .{ .dafsa = dafsa[node.child_index..][0..node.children_len] };
-                return true;
+                return .consume_and_continue;
             },
             .dafsa => |children| {
                 for (children) |node| {
@@ -103,12 +111,17 @@ pub const Matcher = struct {
                             self.last_matched_unique_index = self.pending_unique_index;
                             self.ends_with_semicolon = c == ';';
                             self.overconsumed_code_points = 0;
+                            if (self.ends_with_semicolon) return .consume_and_end;
                         }
                         self.search_state.dafsa = dafsa[node.child_index..][0..node.children_len];
-                        return true;
+                        // There are no named character references without semicolons that are not
+                        // substrings of the same named character reference without a semicolon, so
+                        // we know at this point that a longer named character reference is possible.
+                        std.debug.assert(node.children_len > 0);
+                        return .consume_and_continue;
                     }
                 }
-                return false;
+                return .dont_consume_and_end;
             },
         }
     }
@@ -132,24 +145,30 @@ test Matcher {
     // all behave the same.
 
     // 'n' can still match something
-    try std.testing.expect(matcher.tryConsumeCodePoint('n'));
+    try std.testing.expectEqual(.consume_and_continue, matcher.tryConsumeCodePoint('n'));
     try std.testing.expectEqual(0, matcher.last_matched_unique_index);
 
     // 'no' can still match something
-    try std.testing.expect(matcher.tryConsumeByte('o'));
+    try std.testing.expectEqual(.consume_and_continue, matcher.tryConsumeByte('o'));
     try std.testing.expectEqual(0, matcher.last_matched_unique_index);
 
     // 'not' matches fully
-    try std.testing.expect(matcher.tryConsumeAsciiChar('t'));
+    try std.testing.expectEqual(.consume_and_continue, matcher.tryConsumeAsciiChar('t'));
     try std.testing.expect(matcher.last_matched_unique_index != 0);
     const not_unique_index = matcher.last_matched_unique_index;
 
+    {
+        // Copy matcher and test that &not; leads to .consume_and_end
+        var complete_matcher = matcher;
+        try std.testing.expectEqual(.consume_and_end, complete_matcher.tryConsumeAsciiChar(';'));
+    }
+
     // 'noti' can still match something, but 'not' is still the last full match
-    try std.testing.expect(matcher.tryConsumeAsciiChar('i'));
+    try std.testing.expectEqual(.consume_and_continue, matcher.tryConsumeAsciiChar('i'));
     try std.testing.expectEqual(not_unique_index, matcher.last_matched_unique_index);
 
     // 'noti!' can no longer match anything, and 'not' is still the last full match
-    try std.testing.expect(!matcher.tryConsumeAsciiChar('!'));
+    try std.testing.expectEqual(.dont_consume_and_end, matcher.tryConsumeAsciiChar('!'));
     try std.testing.expectEqual(not_unique_index, matcher.last_matched_unique_index);
 }
 

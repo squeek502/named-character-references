@@ -18,7 +18,7 @@ fn parse(input: []const u8, output_buf: []u8) !ParseResult {
 
     var matcher = named_character_references.Matcher{};
     for (input[1..]) |c| {
-        if (!matcher.tryConsumeByte(c)) break;
+        if (matcher.tryConsumeByte(c) != .consume_and_continue) break;
     }
 
     if (matcher.getCodepoints()) |codepoints| {

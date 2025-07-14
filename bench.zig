@@ -64,7 +64,7 @@ pub fn main() !void {
 
         var matcher = Matcher{};
         for (buf.slice()) |c| {
-            if (!matcher.char(c)) break;
+            if (!matcher.tryConsumeByte(c)) break;
         }
 
         if (matcher.getCodepoints()) |codepoints| {

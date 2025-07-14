@@ -28,23 +28,23 @@ pub const Matcher = struct {
     /// If `c` is the codepoint of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn codepoint(self: *Matcher, c: u21) bool {
+    pub fn tryConsumeCodePoint(self: *Matcher, c: u21) bool {
         if (c > std.math.maxInt(u7)) return false;
-        return self.ascii_char(@intCast(c));
+        return self.tryConsumeAsciiChar(@intCast(c));
     }
 
     /// If `c` is the character of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn char(self: *Matcher, c: u8) bool {
+    pub fn tryConsumeByte(self: *Matcher, c: u8) bool {
         if (c > std.math.maxInt(u7)) return false;
-        return self.ascii_char(@intCast(c));
+        return self.tryConsumeAsciiChar(@intCast(c));
     }
 
     /// If `c` is the character of a child of the current `node_index`, the `node_index`
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
-    pub fn ascii_char(self: *Matcher, c: u7) bool {
+    pub fn tryConsumeAsciiChar(self: *Matcher, c: u7) bool {
         switch (self.search_state) {
             .init => {
                 if (!std.ascii.isAlphabetic(c)) return false;
@@ -128,25 +128,28 @@ pub const Matcher = struct {
 test Matcher {
     var matcher = Matcher{};
 
+    // Note: CodePoint/Byte/AsciiChar variants are intermixed here since they should
+    // all behave the same.
+
     // 'n' can still match something
-    try std.testing.expect(matcher.char('n'));
+    try std.testing.expect(matcher.tryConsumeCodePoint('n'));
     try std.testing.expectEqual(0, matcher.last_matched_unique_index);
 
     // 'no' can still match something
-    try std.testing.expect(matcher.char('o'));
+    try std.testing.expect(matcher.tryConsumeByte('o'));
     try std.testing.expectEqual(0, matcher.last_matched_unique_index);
 
     // 'not' matches fully
-    try std.testing.expect(matcher.char('t'));
+    try std.testing.expect(matcher.tryConsumeAsciiChar('t'));
     try std.testing.expect(matcher.last_matched_unique_index != 0);
     const not_unique_index = matcher.last_matched_unique_index;
 
     // 'noti' can still match something, but 'not' is still the last full match
-    try std.testing.expect(matcher.char('i'));
+    try std.testing.expect(matcher.tryConsumeAsciiChar('i'));
     try std.testing.expectEqual(not_unique_index, matcher.last_matched_unique_index);
 
     // 'noti!' can no longer match anything, and 'not' is still the last full match
-    try std.testing.expect(!matcher.char('!'));
+    try std.testing.expect(!matcher.tryConsumeAsciiChar('!'));
     try std.testing.expectEqual(not_unique_index, matcher.last_matched_unique_index);
 }
 

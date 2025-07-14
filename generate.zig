@@ -384,7 +384,7 @@ pub fn main() !void {
         try writer.writeAll("};\n\n");
 
         var second_layer_offset: usize = 0;
-        try writer.writeAll("pub const bit_masks = [_]FirstToSecondLink {\n");
+        try writer.writeAll("pub const first_to_second_layer = [_]FirstToSecondLink {\n");
         for (0..128) |c_usize| {
             const c: u7 = @intCast(c_usize);
             const child = builder.root.children[c] orelse continue;

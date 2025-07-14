@@ -9,7 +9,7 @@ const builtin = @import("builtin");
 const want_safety = builtin.mode == .Debug;
 
 pub const Matcher = struct {
-    children_to_check: ChildrenToCheck = .init,
+    search_state: SearchState = .init,
     last_matched_unique_index: u12 = 0,
     pending_unique_index: u12 = 0,
     /// This will be true if the last match ends with a semicolon
@@ -19,9 +19,9 @@ pub const Matcher = struct {
     /// we use `u6` instead of `u5` due to an implementation detail.
     overconsumed_code_points: u6 = 0,
 
-    const ChildrenToCheck = union(enum) {
+    const SearchState = union(enum) {
         init: void,
-        second_layer: FirstToSecondLink,
+        first_to_second_layer: FirstToSecondLink,
         dafsa: []const Node,
     };
 
@@ -45,17 +45,17 @@ pub const Matcher = struct {
     /// is updated to that child and the function returns `true`.
     /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn ascii_char(self: *Matcher, c: u7) bool {
-        switch (self.children_to_check) {
+        switch (self.search_state) {
             .init => {
                 if (!std.ascii.isAlphabetic(c)) return false;
                 const index = asciiAlphabeticToIndex(c);
                 const node = first_layer[index];
-                self.children_to_check = .{ .second_layer = bit_masks[index] };
+                self.search_state = .{ .first_to_second_layer = first_to_second_layer[index] };
                 self.pending_unique_index = @intCast(node.number);
                 self.overconsumed_code_points += 1;
                 return true;
             },
-            .second_layer => |link| {
+            .first_to_second_layer => |link| {
                 if (!std.ascii.isAlphabetic(c)) return false;
                 const bit_index = asciiAlphabeticToIndex(c);
                 if (@as(u52, 1) << bit_index & link.mask == 0) return false;
@@ -90,7 +90,7 @@ pub const Matcher = struct {
                     self.ends_with_semicolon = c == ';';
                     self.overconsumed_code_points = 0;
                 }
-                self.children_to_check = .{ .dafsa = dafsa[node.child_index..][0..node.children_len] };
+                self.search_state = .{ .dafsa = dafsa[node.child_index..][0..node.children_len] };
                 return true;
             },
             .dafsa => |children| {
@@ -104,7 +104,7 @@ pub const Matcher = struct {
                             self.ends_with_semicolon = c == ';';
                             self.overconsumed_code_points = 0;
                         }
-                        self.children_to_check.dafsa = dafsa[node.child_index..][0..node.children_len];
+                        self.search_state.dafsa = dafsa[node.child_index..][0..node.children_len];
                         return true;
                     }
                 }
@@ -308,7 +308,7 @@ pub const first_layer = [_]FirstLayerNode{
     .{ .number = 2218 },
 };
 
-pub const bit_masks = [_]FirstToSecondLink{
+pub const first_to_second_layer = [_]FirstToSecondLink{
     .{ .mask = 0x007be19c001010, .second_layer_offset = 0 },
     .{ .mask = 0x005900d4000000, .second_layer_offset = 16 },
     .{ .mask = 0x005926f4004080, .second_layer_offset = 24 },

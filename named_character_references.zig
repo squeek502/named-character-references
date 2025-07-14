@@ -14,6 +14,10 @@ pub const Matcher = struct {
     pending_unique_index: u12 = 0,
     /// This will be true if the last match ends with a semicolon
     ends_with_semicolon: bool = false,
+    /// Note: Longest string of overconsumed characters is 31 (corresponding to
+    /// longest named character reference &CounterClockwiseContourIntegral;), but
+    /// we use `u6` instead of `u5` due to an implementation detail.
+    overconsumed_code_points: u6 = 0,
 
     const ChildrenToCheck = union(enum) {
         init: void,
@@ -48,6 +52,7 @@ pub const Matcher = struct {
                 const node = first_layer[index];
                 self.children_to_check = .{ .second_layer = bit_masks[index] };
                 self.pending_unique_index = @intCast(node.number);
+                self.overconsumed_code_points += 1;
                 return true;
             },
             .second_layer => |link| {
@@ -78,10 +83,12 @@ pub const Matcher = struct {
                 const char_index = @popCount(link.mask & mask);
                 const node = second_layer.get(link.second_layer_offset + char_index);
                 self.pending_unique_index += node.number;
+                self.overconsumed_code_points += 1;
                 if (node.end_of_word) {
                     self.pending_unique_index += 1;
                     self.last_matched_unique_index = self.pending_unique_index;
                     self.ends_with_semicolon = c == ';';
+                    self.overconsumed_code_points = 0;
                 }
                 self.children_to_check = .{ .dafsa = dafsa[node.child_index..][0..node.children_len] };
                 return true;
@@ -90,10 +97,12 @@ pub const Matcher = struct {
                 for (children) |node| {
                     if (node.char == c) {
                         self.pending_unique_index += node.number;
+                        self.overconsumed_code_points += 1;
                         if (node.end_of_word) {
                             self.pending_unique_index += 1;
                             self.last_matched_unique_index = self.pending_unique_index;
                             self.ends_with_semicolon = c == ';';
+                            self.overconsumed_code_points = 0;
                         }
                         self.children_to_check.dafsa = dafsa[node.child_index..][0..node.children_len];
                         return true;

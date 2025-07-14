@@ -17,10 +17,8 @@ fn parse(input: []const u8, output_buf: []u8) !ParseResult {
     std.debug.assert(input[0] == '&');
 
     var matcher = named_character_references.Matcher{};
-    var num_pending_chars: usize = 1; // the &
     for (input[1..]) |c| {
         if (!matcher.char(c)) break;
-        num_pending_chars += 1;
     }
 
     if (matcher.getCodepoints()) |codepoints| {
@@ -33,6 +31,8 @@ fn parse(input: []const u8, output_buf: []u8) !ParseResult {
             .status = if (matcher.ends_with_semicolon) .ok else .missing_semicolon,
         };
     } else {
+        // Include the & in the number of pending characters since there was no match
+        const num_pending_chars = matcher.overconsumed_code_points + 1;
         @memcpy(output_buf[0..num_pending_chars], input[0..num_pending_chars]);
         return .{ .output = output_buf[0..num_pending_chars] };
     }

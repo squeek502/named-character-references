@@ -14,9 +14,10 @@ pub const Matcher = struct {
     pending_unique_index: u12 = 0,
     /// This will be true if the last match ends with a semicolon
     ends_with_semicolon: bool = false,
-    /// Note: Longest string of overconsumed characters is 31 (corresponding to
-    /// longest named character reference &CounterClockwiseContourIntegral;), but
-    /// we use `u6` instead of `u5` due to an implementation detail.
+    /// Note: The longest possible string of overconsumed characters is 31
+    /// (corresponding to the longest named character reference &CounterClockwiseContourIntegral;),
+    /// so that would fit into a `u5` but we use `u6` due to an implementation detail (incrementing
+    /// `overconsumed_code_points` before checking for an end-of-word match).
     overconsumed_code_points: u6 = 0,
 
     const SearchState = union(enum) {
@@ -31,25 +32,16 @@ pub const Matcher = struct {
         dont_consume_and_end,
     };
 
-    /// If `c` is the codepoint of a child of the current `node_index`, the `node_index`
-    /// is updated to that child and the function returns `true`.
-    /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn tryConsumeCodePoint(self: *Matcher, c: u21) ConsumeResult {
         if (c > std.math.maxInt(u7)) return .dont_consume_and_end;
         return self.tryConsumeAsciiChar(@intCast(c));
     }
 
-    /// If `c` is the character of a child of the current `node_index`, the `node_index`
-    /// is updated to that child and the function returns `true`.
-    /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn tryConsumeByte(self: *Matcher, c: u8) ConsumeResult {
         if (c > std.math.maxInt(u7)) return .dont_consume_and_end;
         return self.tryConsumeAsciiChar(@intCast(c));
     }
 
-    /// If `c` is the character of a child of the current `node_index`, the `node_index`
-    /// is updated to that child and the function returns `true`.
-    /// Otherwise, the `node_index` is unchanged and the function returns false.
     pub fn tryConsumeAsciiChar(self: *Matcher, c: u7) ConsumeResult {
         switch (self.search_state) {
             .init => {

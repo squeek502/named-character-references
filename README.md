@@ -6,13 +6,15 @@ That is, the goal is to encode the necessary data compactly while still allowing
 
 > This list [of named character references] is static and [will not be expanded or changed in the future](https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references).
 
-I've written an in-depth article about the approach I'm using, plus a comparison to the approaches used by Chrome/Firefox/Safari here:
+The implementation in this repository has also been ported to C++ and used in the [Ladybird browser](https://ladybird.org/) ([initial PR](https://github.com/LadybirdBrowser/ladybird/pull/3011), [follow-up PR](https://github.com/LadybirdBrowser/ladybird/pull/5393))
+
+I've written an in-depth article about the DAFSA approach being used, plus a comparison to the approaches used by Chrome/Firefox/Safari here:
 
 - [Slightly better named character reference tokenization than Chrome, Safari, and Firefox](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/)
 
-The current implementation in this repository is an evolution of what's described in that article.
+The current implementation is an evolution of what's described in that article.
 
-## A description of the modified DAFSA
+## A description of the modifications made to the DAFSA
 
 I'll skip over describing a typical DAFSA (see [the article for a thorough explanation](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/)) and only talk about the modifications that were made. The TL;DR is that lookup tables were added to make the search for the first and second character `O(1)` instead of `O(n)`.
 
@@ -28,6 +30,8 @@ I'll skip over describing a typical DAFSA (see [the article for a thorough expla
   - Instead of storing a 'last sibling' flag to denote the end of a list of children, the length of each node's list of children is stored. Again, this is mostly done just because there are enough bits available to do so while keeping the DAFSA node within 32 bits.
   - Note: Storing the length of each list of children opens up the possibility of using a binary search instead of a linear search over the children, but due to the consistently small lengths of the lists of children in the remaining DAFSA, a linear search actually seems to be the better option.
 
+Overall, these changes give the DAFSA implementation about a 2x speedup in the 'raw matching speed' benchmark I'm using.
+
 ## Data size
 
 - The 'first layer' contains an array of 52 elements, each 2 bytes large, so that's 104 bytes
@@ -38,18 +42,21 @@ I'll skip over describing a typical DAFSA (see [the article for a thorough expla
 - Minimal perfect hashing is used to allow storing a separate array containing the codepoint(s) to transform each named character reference into
   + This is encoded as packed array of `u21` integers, which allows the storage of 2,231 `character reference -> codepoint(s)` transformations in 5,857 bytes
 
-This means that the full named character reference data is stored in 15,170 + 5,857 = 21,027 bytes or 20.53 KiB. This is actually 318 fewer bytes than the traditional DAFSA implementation used (3,872 4-byte nodes in a single array).
+This means that the full named character reference data is stored in 15,170 + 5,857 = 21,027 bytes or 20.53 KiB. This is actually 318 fewer bytes than the traditional DAFSA implementation would use (3,872 4-byte nodes in a single array).
 
 > [!NOTE]
 > It's also possible to remove the semicolon nodes from the DAFSA (inspired by a change that [Safari made](https://github.com/WebKit/WebKit/commit/3483dcf98d883183eb0621479ed8f19451533722)). This would save 796 bytes (199 4-byte nodes removed from the DAFSA), but has a performance cost so I didn't feel it was worth it overall. If you're curious, see [this commit](https://github.com/squeek502/named-character-references/commit/66b10fcbc84f51edf03bc167debd77afbeb31d8c) for how that change could be implemented.
 
-### `named_character_references.zig`
+## Development
 
-Contains the generated `dafsa` array, the packed version of the `codepoints_lookup` array, and helper functions to deal with both in ways that are relevant to the *Named character reference state* specification.
+The DAFSA data is generated and the result is combined with the rest of the relevant code and the combination is then checked into the repository (see `named_character_references.zig`). This is done for two reasons (but I'm not claiming they are good reasons):
+
+1. Zig's `comptime` is [currently too slow](https://github.com/ziglang/zig/issues/4055) to handle generating the DAFSA data at compile-time
+2. The generation step rarely needs to change, so it being a manual process is not a big deal
 
 ### `generate.zig`
 
-> Note: Running this is only necessary if the encoding of the `dafsa` or `codepoints_lookup` arrays are changed
+> Note: Running this is only necessary if the encoding of the DAFSA is changed
 
 Requires `entities.json` which can be downloaded from [here](https://html.spec.whatwg.org/entities.json).
 
@@ -57,7 +64,7 @@ Requires `entities.json` which can be downloaded from [here](https://html.spec.w
 zig run generate.zig > generated.zig
 ```
 
-Outputs the generated Zig code to stdout, containing the `dafsa` array and the `codepoints_lookup` packed array.
+Outputs the generated Zig code to stdout, containing all the generated arrays.
 
 ### `test.zig`
 

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.1
+
+      - name: Install qemu
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+
+      - name: Download test file
+        run: curl https://raw.githubusercontent.com/html5lib/html5lib-tests/refs/heads/master/tokenizer/namedEntities.test -o namedEntities.test
+
+      - name: Test
+        run: zig build test
+
+      - name: Test 32-bit
+        if: ${{ matrix.os != 'macos-latest' }}
+        run: zig build test -Dtarget=x86-native
+
+      - name: Test big endian (powerpc64)
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: zig build test -Dtarget=powerpc64-native -fqemu

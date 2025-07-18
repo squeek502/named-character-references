@@ -13,11 +13,14 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     const only_valid = args.len >= 2 and std.mem.eql(u8, args[1], "valid");
 
-    var buf: std.BoundedArray(u8, 64) = .{};
+    // Longest named character reference is 32 characters (not including the &).
+    // Use a buffer of 33 to always have at least one character after the end of the named character reference.
+    var buf: std.BoundedArray(u8, 33) = .{};
     const max_iterations = 1_000_000;
     var num_matches: usize = 0;
     for (0..max_iterations) |_| {
         buf.clear();
+        buf.buffer = @splat(' ');
         const ref = named_character_references[rand.uintLessThan(usize, named_character_references.len)];
         buf.appendSlice(ref) catch unreachable;
 
@@ -38,7 +41,9 @@ pub fn main() !void {
                     buf.set(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand));
                 },
                 .truncated => {
-                    buf.len -= rand.uintLessThan(usize, buf.len);
+                    const truncated_len = rand.uintLessThan(usize, buf.len);
+                    buf.len -= truncated_len;
+                    buf.appendNTimesAssumeCapacity(' ', truncated_len);
                 },
                 .insert_character => {
                     buf.insert(rand.uintLessThan(usize, buf.len), randAlphabeticAscii(rand)) catch unreachable;
@@ -63,7 +68,7 @@ pub fn main() !void {
         }
 
         var matcher = Matcher{};
-        for (buf.slice()) |c| {
+        for (&buf.buffer) |c| {
             if (matcher.tryConsumeByte(c) != .consume_and_continue) break;
         }
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const named_character_references = @import("named_character_references.zig");
+const named_character_references = @import("named_character_references");
 
 pub const ParseResult = struct {
     /// UTF-8
@@ -41,7 +41,10 @@ fn parse(input: []const u8, output_buf: []u8) !ParseResult {
 test "namedEntities.test" {
     const allocator = std.testing.allocator;
 
-    const test_json_contents = try std.fs.cwd().readFileAlloc(allocator, "namedEntities.test", std.math.maxInt(usize));
+    const test_json_contents = std.fs.cwd().readFileAlloc(allocator, "namedEntities.test", std.math.maxInt(usize)) catch |err| switch (err) {
+        error.FileNotFound => return error.SkipZigTest,
+        else => |e| return e,
+    };
     defer allocator.free(test_json_contents);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, test_json_contents, .{});

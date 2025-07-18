@@ -55,26 +55,27 @@ The DAFSA data is generated and the result is combined with the rest of the rele
 1. Zig's `comptime` is [currently too slow](https://github.com/ziglang/zig/issues/4055) to handle generating the DAFSA data at compile-time
 2. The generation step rarely needs to change, so it being a manual process is not a big deal
 
-### `generate.zig`
+### Generating the DAFSA data
 
 > Note: Running this is only necessary if the encoding of the DAFSA is changed
 
 Requires `entities.json` which can be downloaded from [here](https://html.spec.whatwg.org/entities.json).
 
 ```
-zig run generate.zig > generated.zig
+zig build generate
+./zig-out/bin/generate > generated.zig
 ```
 
 Outputs the generated Zig code to stdout, containing all the generated arrays.
 
-### `test.zig`
+### Testing
 
 > Note: This is not a full test of the *Named character reference state* tokenization step; instead, it's a somewhat crude approximation in order to run the `namedEntities.test` test cases
 
-Requires `namedEntities.test` from `html5lib-tests` which can be downloaded from [here](https://github.com/html5lib/html5lib-tests/blob/master/tokenizer/namedEntities.test)
+The main test needs `namedEntities.test` from `html5lib-tests` which can be downloaded from [here](https://github.com/html5lib/html5lib-tests/blob/master/tokenizer/namedEntities.test). That test is skipped if that file is not found.
 
 ```
-zig test test.zig
+zig build test
 ```
 
 ## References / Resources used

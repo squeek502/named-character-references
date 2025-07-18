@@ -1,0 +1,14 @@
+.{
+    .name = .named_character_references,
+    .version = "0.1.0",
+    .fingerprint = 0x929fbcc0825a3c75,
+    .minimum_zig_version = "0.14.1",
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src/named_character_references.zig",
+        "LICENSE",
+        "README.md",
+    },
+}

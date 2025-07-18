@@ -107,7 +107,7 @@ pub const Matcher = struct {
                         }
                         self.search_state.dafsa = dafsa[node.child_index..][0..node.children_len];
                         // There are no named character references without semicolons that are not
-                        // substrings of the same named character reference without a semicolon, so
+                        // substrings of the same named character reference with a semicolon, so
                         // we know at this point that a longer named character reference is possible.
                         std.debug.assert(node.children_len > 0);
                         return .consume_and_continue;

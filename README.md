@@ -6,14 +6,14 @@ That is, the goal is to encode the necessary data compactly while still allowing
 
 > This list [of named character references] is static and [will not be expanded or changed in the future](https://github.com/whatwg/html/blob/main/FAQ.md#html-should-add-more-named-character-references).
 
-> [!NOTE]
-> The implementation in this repository has also been ported to C++ and used in the [Ladybird browser](https://ladybird.org/) ([initial PR](https://github.com/LadybirdBrowser/ladybird/pull/3011), [follow-up PR](https://github.com/LadybirdBrowser/ladybird/pull/5393))
-
 I've written an in-depth article about the DAFSA approach being used, plus a comparison to the approaches used by Chrome/Firefox/Safari here:
 
 - [Slightly better named character reference tokenization than Chrome, Safari, and Firefox](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/)
 
 The current implementation is an evolution of what's described in that article.
+
+> [!NOTE]
+> The implementation in this repository has also been ported to C++ and used in the [Ladybird browser](https://ladybird.org/) ([initial PR](https://github.com/LadybirdBrowser/ladybird/pull/3011), [follow-up PR](https://github.com/LadybirdBrowser/ladybird/pull/5393))
 
 ## A description of the modifications made to the DAFSA
 

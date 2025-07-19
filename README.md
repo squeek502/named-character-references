@@ -15,6 +15,33 @@ The current implementation is an evolution of what's described in that article.
 > [!NOTE]
 > The implementation in this repository has also been ported to C++ and used in the [Ladybird browser](https://ladybird.org/) ([initial PR](https://github.com/LadybirdBrowser/ladybird/pull/3011), [follow-up PR](https://github.com/LadybirdBrowser/ladybird/pull/5393))
 
+## Usage
+
+Currently targets the latest Zig release (0.14.1).
+
+Add the package to your `build.zig.zon`, e.g.:
+
+```
+zig fetch --save git+https://github.com/squeek502/named-character-references.git
+```
+
+In your `build.zig`:
+
+```zig
+const named_character_references = b.dependency("named_character_references", .{
+    .target = target,
+    .optimize = optimize,
+});
+const named_character_references_mod = named_character_references.module("named_character_references");
+
+// Add the module as an import wherever it's needed
+your_compile_step.root_module.addImport("named_character_references", named_character_references_mod);
+```
+
+An example of how to use the API to implement the named character reference state can be found [here](https://github.com/LadybirdBrowser/ladybird/blob/714ff4e3f9567257597878568fe25749a856845e/Libraries/LibWeb/HTML/Parser/HTMLTokenizer.cpp#L1696-L1771) (it's C++ but it's using the same `Matcher` API that the Zig implementation exposes)
+
+TODO: Add a proper reference implementation of the named character reference tokenization state to this repository.
+
 ## A description of the modifications made to the DAFSA
 
 I'll skip over describing a typical DAFSA (see [the article for a thorough explanation](https://www.ryanliptak.com/blog/better-named-character-reference-tokenization/)) and only talk about the modifications that were made. The TL;DR is that lookup tables were added to make the search for the first and second character `O(1)` instead of `O(n)`.
